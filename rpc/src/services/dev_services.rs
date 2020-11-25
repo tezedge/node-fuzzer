@@ -72,7 +72,7 @@ pub(crate) fn get_stats_memory() -> MemoryStatsResult<MemoryData> {
     memory.get_memory_stats()
 }
 
-pub(crate) fn get_database_memstats(context: &TezedgeContext) -> Result<MerkleStorageStats, failure::Error> {
+pub(crate) fn get_context_stats(context: &TezedgeContext) -> Result<MerkleStorageStats, failure::Error> {
     Ok(context.get_merkle_stats()?)
 }
 
