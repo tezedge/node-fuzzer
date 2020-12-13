@@ -11,19 +11,10 @@ use tezos_api::ffi::ProtocolRpcError;
 use tezos_messages::ts_to_rfc3339;
 use tezos_wrapper::service::{ProtocolError, ProtocolServiceError};
 
-use crate::{
-    empty,
-    encoding::{
-        base_types::*,
-        monitor::BootstrapInfo,
-    },
-    make_json_response,
-    make_json_stream_response,
-    result_option_to_json_response,
-    result_to_json_response,
-    ServiceResult,
-    services,
-};
+use crate::{empty, encoding::{
+    base_types::*,
+    monitor::BootstrapInfo,
+}, make_json_response, make_json_stream_response, result_option_to_json_response, result_to_json_response, ServiceResult, services, helpers};
 use crate::helpers::{create_rpc_request, parse_block_hash, parse_chain_id};
 use crate::server::{HasSingleValue, HResult, Params, Query, RpcServiceEnvironment};
 use crate::services::{base_services, stream_services};
@@ -246,10 +237,8 @@ pub async fn inject_block(req: Request<Body>, _: Params, _: Query, env: RpcServi
 }
 
 pub async fn mempool_request_operations(_: Request<Body>, _: Params, _: Query, env: RpcServiceEnvironment) -> ServiceResult {
-    let shell_channel = env.shell_channel();
-
     result_to_json_response(
-        services::mempool_services::request_operations(&env, shell_channel.clone()),
+        services::mempool_services::request_operations(env.shell_channel.clone()),
         env.log(),
     )
 }
@@ -423,7 +412,7 @@ pub async fn describe(method: Method, req: Request<Body>, _: Params, _: Query, e
 
 pub async fn worker_prevalidators(_: Request<Body>, _: Params, _: Query, env: RpcServiceEnvironment) -> ServiceResult {
     result_to_json_response(
-        base_services::get_prevalidators(&env),
+        helpers::get_prevalidators(&env, None),
         env.log(),
     )
 }

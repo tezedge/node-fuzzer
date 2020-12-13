@@ -20,6 +20,7 @@ use tezos_messages::p2p::binary_message::{BinaryMessage, MessageHash};
 use tezos_messages::p2p::encoding::operation::DecodedOperation;
 use tezos_messages::p2p::encoding::prelude::{BlockHeader, Operation};
 
+use crate::helpers::get_prevalidators;
 use crate::server::RpcServiceEnvironment;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -146,6 +147,11 @@ pub fn inject_operation(
     let block_storage: Box<dyn BlockStorageReader> = Box::new(BlockStorage::new(persistent_storage));
     let block_meta_storage: Box<dyn BlockMetaStorageReader> = Box::new(BlockMetaStorage::new(persistent_storage));
 
+    // find prevalidator for chain_id, if not found, then stop
+    if get_prevalidators(env, Some(&chain_id))?.is_empty() {
+        bail!("Prevalidator is not running, cannot inject the operation.");
+    }
+
     // parse operation data
     let operation: Operation = Operation::from_bytes(hex::decode(operation_data)?)?;
     let operation_hash = operation.message_hash()?;
@@ -247,25 +253,14 @@ pub fn inject_block(
     Ok(block_hash)
 }
 
-pub fn request_operations(
-    env: &RpcServiceEnvironment,
-    shell_channel: ShellChannelRef) -> Result<HashMap<String, String>, failure::Error> {
-    let state = env.state();
-
-    let state = state.read().unwrap();
-
-    if state.disable_mempool() {
-        bail!("Cannot request operations, mempool is disabled")
-    }
-
+pub fn request_operations(shell_channel: ShellChannelRef) -> Result<(), failure::Error> {
     // request current head from the peers
     shell_channel.tell(
         Publish {
             msg: RequestCurrentHead.into(),
             topic: ShellChannelTopic::ShellEvents.into(),
         }, None);
-
-    Ok(HashMap::new())
+    Ok(())
 }
 
 #[cfg(test)]

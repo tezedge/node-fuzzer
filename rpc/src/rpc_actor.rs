@@ -34,8 +34,6 @@ pub struct RpcCollectedState {
     current_head: Option<BlockApplied>,
     #[get_copy = "pub(crate)"]
     is_sandbox: bool,
-    #[get_copy = "pub(crate)"]
-    disable_mempool: bool,
 }
 
 /// Actor responsible for managing HTTP REST API and server, and to share parts of inner actor
@@ -64,11 +62,10 @@ impl RpcServer {
         network_version: Arc<NetworkVersion>,
         init_storage_data: &StorageInitInfo,
         is_sandbox: bool,
-        disable_mempool: bool) -> Result<RpcServerRef, CreateError> {
+    ) -> Result<RpcServerRef, CreateError> {
         let shared_state = Arc::new(RwLock::new(RpcCollectedState {
             current_head: load_current_head(persistent_storage, &init_storage_data.chain_id, &sys.log()),
             is_sandbox,
-            disable_mempool,
         }));
         let actor_ref = sys.actor_of_props::<RpcServer>(
             Self::name(),
