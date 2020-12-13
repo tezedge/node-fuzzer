@@ -1,11 +1,12 @@
 // Copyright (c) SimpleStaking and Tezedge Contributors
 // SPDX-License-Identifier: MIT
 
-use failure::bail;
+use failure::{bail, format_err};
 use riker::actor::ActorReference;
 use serde::Serialize;
 
 use crypto::hash::{BlockHash, chain_id_to_b58_string, ChainId, HashType};
+use shell::mempool::mempool_prevalidator::MempoolPrevalidator;
 use shell::shell_channel::BlockApplied;
 use storage::{BlockHeaderWithHash, BlockMetaStorage, BlockMetaStorageReader, BlockStorage, BlockStorageReader, context_key};
 use storage::block_storage::BlockJsonData;
@@ -104,27 +105,36 @@ pub(crate) struct Prevalidator {
 }
 
 // TODO: implement the json structure form ocaml's RPC 
-pub(crate) fn get_prevalidators(env: &RpcServiceEnvironment) -> Vec<Prevalidator> {
-    if env.sys().user_root().children().filter(|actor_ref| actor_ref.name() == "mempool-prevalidator").next().is_none() {
-        vec![]
-    } else {
-        let rpc_state = env.state().read().unwrap();
-        let current_mempool = if let Some(mempool_state) = rpc_state.current_mempool_state(){
-            mempool_state.read().unwrap()
-        } else {
-            return vec![]
-        };
-        let chain_id = if let Some(chain_id) = &current_mempool.chain_id {
-            chain_id
-        } else {
-            return vec![]
-        };
-        vec![Prevalidator {
-            chain_id: chain_id_to_b58_string(&chain_id),
-            since: env.sys().start_date().to_rfc3339(),
-        }]
-    }
+pub(crate) fn get_prevalidators(env: &RpcServiceEnvironment) -> Result<Vec<Prevalidator>, failure::Error> {
+    // expecting max one prevalidator by name
+    let mempool_prevalidator = env.sys()
+        .user_root()
+        .children()
+        .filter(|actor_ref| actor_ref.name() == MempoolPrevalidator::name())
+        .next();
 
+    let prevalidators = match mempool_prevalidator {
+        Some(_mempool_prevalidator_actor) => {
+            let mempool_state = env.current_mempool_state_storage().read()
+                .map_err(|e| format_err!("Failed to obtain read lock, reson: {}", e))?;
+            let mempool_prevalidator = mempool_state.prevalidator();
+            match mempool_prevalidator {
+                Some(prevalidator) => {
+                    vec![
+                        Prevalidator {
+                            chain_id: chain_id_to_b58_string(&prevalidator.chain_id),
+                            // TODO: here should be exact date of _mempool_prevalidator_actor, not system at all
+                            since: env.sys().start_date().to_rfc3339(),
+                        }
+                    ]
+                }
+                None => vec![]
+            }
+        }
+        None => vec![]
+    };
+
+    Ok(prevalidators)
 }
 
 /// Extract the current_protocol and the next_protocol from the block metadata

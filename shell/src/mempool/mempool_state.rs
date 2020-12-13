@@ -70,6 +70,35 @@ impl MempoolState {
         }
     }
 
+    /// Removes operation from mempool
+    pub fn remove_operation(&mut self, oph: OperationHash) {
+        // remove from applied
+        if let Some(pos) = self.validation_result.applied.iter().position(|x| oph.eq(&x.hash)) {
+            self.validation_result.applied.remove(pos);
+            self.operations.remove(&oph);
+        }
+        // remove from branch_delayed
+        if let Some(pos) = self.validation_result.branch_delayed.iter().position(|x| oph.eq(&x.hash)) {
+            self.validation_result.branch_delayed.remove(pos);
+            self.operations.remove(&oph);
+        }
+        // remove from branch_refused
+        if let Some(pos) = self.validation_result.branch_refused.iter().position(|x| oph.eq(&x.hash)) {
+            self.validation_result.branch_refused.remove(pos);
+            self.operations.remove(&oph);
+        }
+        // remove from refused
+        if let Some(pos) = self.validation_result.refused.iter().position(|x| oph.eq(&x.hash)) {
+            self.validation_result.refused.remove(pos);
+            self.operations.remove(&oph);
+        }
+        // remove from pending
+        if self.pending.contains(&oph) {
+            self.pending.remove(&oph);
+            self.operations.remove(&oph);
+        }
+    }
+
     /// Indicates, that pending operations can be handled
     /// Returns - None, if nothing can be done, or Some(prevalidator, head, pendings, operations) to handle
     pub(crate) fn can_handle_pending(&mut self) -> Option<(&PrevalidatorWrapper, &BlockHash, &mut HashSet<OperationHash>, &HashMap<OperationHash, Operation>, &mut ValidateOperationResult)> {
@@ -205,6 +234,11 @@ mod tests {
         assert_eq!(1, state.operations.len());
         assert!(state.pending.contains(&op_hash2));
         assert!(unneeded.contains(&op_hash1));
+
+        // remove operation
+        state.remove_operation(op_hash2);
+        assert!(state.pending.is_empty());
+        assert!(state.operations.is_empty());
 
         Ok(())
     }

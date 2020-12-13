@@ -124,7 +124,7 @@ impl MempoolPrevalidator {
 
     /// The `MempoolPrevalidator` is intended to serve as a singleton actor so that's why
     /// we won't support multiple names per instance.
-    fn name() -> &'static str {
+    pub fn name() -> &'static str {
         "mempool-prevalidator"
     }
 
