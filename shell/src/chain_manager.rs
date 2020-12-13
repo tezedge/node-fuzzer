@@ -13,7 +13,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use failure::{Error, format_err};
@@ -39,7 +39,9 @@ use tezos_messages::p2p::encoding::prelude::*;
 use tezos_wrapper::TezosApiConnectionPool;
 
 use crate::{PeerConnectionThreshold, validation};
-use crate::shell_channel::{AllBlockOperationsReceived, BlockReceived, CurrentMempoolState, MempoolOperationReceived, ShellChannelMsg, ShellChannelRef, ShellChannelTopic};
+use crate::mempool::CurrentMempoolStateStorageRef;
+use crate::mempool::mempool_state::MempoolState;
+use crate::shell_channel::{AllBlockOperationsReceived, BlockReceived, MempoolOperationReceived, ShellChannelMsg, ShellChannelRef, ShellChannelTopic};
 use crate::state::block_state::{BlockAcceptanceResult, BlockchainState, HeadResult, MissingBlock};
 use crate::state::operations_state::{MissingOperations, OperationsState};
 use crate::subscription::*;
@@ -52,8 +54,6 @@ const BLOCK_OPERATIONS_BATCH_SIZE: usize = 10;
 const MEMPOOL_OPERATIONS_BATCH_SIZE: usize = 10;
 /// How often to check chain completeness
 const CHECK_CHAIN_COMPLETENESS_INTERVAL: Duration = Duration::from_secs(30);
-/// How often to ask all connected peers for current branch
-const ASK_CURRENT_BRANCH_INTERVAL: Duration = Duration::from_secs(600);
 /// How often to ask all connected peers for current head
 const ASK_CURRENT_HEAD_INTERVAL: Duration = Duration::from_secs(90);
 /// Initial delay to ask the peers for current head
@@ -499,7 +499,7 @@ impl ChainManager {
                                                         self.p2p_disable_mempool,
                                                         self.current_mempool_state.clone(),
                                                         &current_head_local,
-                                                    ),
+                                                    )?,
                                                 );
                                                 tell_peer(msg.into(), peer);
                                             }
@@ -827,7 +827,7 @@ impl ChainManager {
                         true,
                     );
                 } else {
-                    return Err(format_err!("BlockHeader ({}) was not found!", HashType::BlockHash.hash_to_b58check(&block_hash)))
+                    return Err(format_err!("BlockHeader ({}) was not found!", HashType::BlockHash.hash_to_b58check(&block_hash)));
                 }
             }
             ShellChannelMsg::InjectBlock(inject_data) => {
@@ -1181,24 +1181,25 @@ impl ChainManager {
             });
     }
 
-    fn resolve_mempool_to_send_to_peer(peer: &PeerState, p2p_disable_mempool: bool, current_mempool_state: CurrentMempoolStateStorageRef, current_head: &Head) -> Mempool {
+    fn resolve_mempool_to_send_to_peer(peer: &PeerState, p2p_disable_mempool: bool, current_mempool_state: CurrentMempoolStateStorageRef, current_head: &Head) -> Result<Mempool, failure::Error> {
         if p2p_disable_mempool {
-            return Mempool::default();
+            return Ok(Mempool::default());
         }
         if !peer.mempool_enabled {
-            return Mempool::default();
+            return Ok(Mempool::default());
         }
 
-        let mempool_state = current_mempool_state.read().unwrap();
+        let mempool_state = current_mempool_state.read()
+            .map_err(|e| format_err!("Failed to lock for read, reason: {}", e))?;
         if let Some(mempool_head_hash) = mempool_state.head() {
             if mempool_head_hash == current_head.block_hash() {
                 let mempool_state: &MempoolState = &mempool_state;
-                mempool_state.into()
+                Ok(mempool_state.into())
             } else {
-                Mempool::default()
+                Ok(Mempool::default())
             }
         } else {
-            Mempool::default()
+            Ok(Mempool::default())
         }
     }
 }

@@ -34,16 +34,6 @@ pub struct MempoolState {
 }
 
 impl MempoolState {
-    fn new(prevalidator: Option<PrevalidatorWrapper>, predecessor: Option<BlockHash>, pending_operations: HashMap<OperationHash, Operation>) -> MempoolState {
-        MempoolState {
-            prevalidator,
-            predecessor,
-            pending: pending_operations.keys().cloned().collect(),
-            validation_result: ValidateOperationResult::default(),
-            operations: pending_operations,
-        }
-    }
-
     /// Reinitialize state for new prevalidator and head, returns unneeded operation hashes
     pub(crate) fn reinit(&mut self, prevalidator: Option<PrevalidatorWrapper>, predecessor: Option<BlockHash>) -> Vec<OperationHash> {
 
@@ -161,8 +151,6 @@ impl From<&MempoolState> for Mempool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use crypto::hash::HashType;
     use tezos_api::ffi::PrevalidatorWrapper;
     use tezos_messages::p2p::binary_message::BinaryMessage;
@@ -175,17 +163,16 @@ mod tests {
         let op_hash1 = HashType::OperationHash.b58check_to_hash("opJ4FdKumPfykAP9ZqwY7rNB8y1SiMupt44RqBDMWL7cmb4xbNr")?;
         let op_hash2 = HashType::OperationHash.b58check_to_hash("onvN8U6QJ6DGJKVYkHXYRtFm3tgBJScj9P5bbPjSZUuFaGzwFuJ")?;
 
-        // init state
-        let mut operations = HashMap::new();
-        operations.insert(
-            op_hash1.clone(),
+        // init state with two pendings
+        let mut state = MempoolState::default();
+        state.add_to_pending(
+            &op_hash1,
             Operation::from_bytes(hex::decode("10490b79070cf19175cd7e3b9c1ee66f6e85799980404b119132ea7e58a4a97e000008c387fa065a181d45d47a9b78ddc77e92a881779ff2cbabbf9646eade4bf1405a08e00b725ed849eea46953b10b5cdebc518e6fd47e69b82d2ca18c4cf6d2f312dd08")?)?,
         );
-        operations.insert(
-            op_hash2.clone(),
+        state.add_to_pending(
+            &op_hash2,
             Operation::from_bytes(hex::decode("10490b79070cf19175cd7e3b9c1ee66f6e85799980404b119132ea7e58a4a97e000008c387fa065a181d45d47a9b78ddc77e92a881779ff2cbabbf9646eade4bf1405a08e00b725ed849eea46953b10b5cdebc518e6fd47e69b82d2ca18c4cf6d2f312dd08")?)?,
         );
-        let mut state = MempoolState::new(None, None, operations);
         assert_eq!(2, state.pending.len());
         assert_eq!(2, state.operations.len());
 

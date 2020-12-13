@@ -3,19 +3,17 @@
 
 //! Shell channel is used to transmit high level shell messages.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use getset::Getters;
 use riker::actors::*;
 
-use crypto::hash::{BlockHash, ChainId, OperationHash, ProtocolHash};
+use crypto::hash::{BlockHash, ChainId, OperationHash};
 use storage::block_storage::BlockJsonData;
 use storage::BlockHeaderWithHash;
 use storage::mempool_storage::MempoolOperationType;
-use tezos_api::ffi::{ApplyBlockRequest, ValidateOperationResult};
+use tezos_api::ffi::ApplyBlockRequest;
 use tezos_messages::Head;
-use tezos_messages::p2p::encoding::block_header::Fitness;
 use tezos_messages::p2p::encoding::prelude::{BlockHeader, Mempool, Operation, Path};
 
 /// Message informing actors about successful block application by protocol
