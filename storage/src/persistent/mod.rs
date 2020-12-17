@@ -14,6 +14,7 @@ pub use schema::{CommitLogDescriptor, CommitLogSchema, KeyValueSchema};
 
 use crate::persistent::sequence::Sequences;
 use crate::merkle_storage::MerkleStorage;
+use crate::in_memory;
 
 pub mod sequence;
 pub mod codec;
@@ -137,7 +138,7 @@ impl PersistentStorage {
             clog,
             kv: kv.clone(),
             seq,
-            merkle: Arc::new(RwLock::new(MerkleStorage::new(kv))),
+            merkle: Arc::new(RwLock::new(MerkleStorage::new(in_memory::KVStore::new()))),
         }
     }
 

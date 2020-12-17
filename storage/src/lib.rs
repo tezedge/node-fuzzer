@@ -24,7 +24,6 @@ pub use crate::block_storage::{BlockAdditionalData, BlockAdditionalDataBuilder, 
 pub use crate::chain_meta_storage::ChainMetaStorage;
 pub use crate::context_action_storage::{ContextActionByBlockHashKey, ContextActionRecordValue, ContextActionStorage};
 pub use crate::mempool_storage::{MempoolStorage, MempoolStorageKV};
-use crate::merkle_storage::MerkleStorage;
 pub use crate::operations_meta_storage::{OperationsMetaStorage, OperationsMetaStorageKV};
 pub use crate::operations_storage::{OperationKey, OperationsStorage, OperationsStorageKV, OperationsStorageReader};
 use crate::persistent::{CommitLogError, DBError, Decoder, Encoder, SchemaError};
@@ -33,6 +32,7 @@ use crate::persistent::sequence::SequenceError;
 pub use crate::system_storage::SystemStorage;
 pub use crate::predecessor_storage::PredecessorStorage;
 
+pub mod in_memory;
 pub mod persistent;
 pub mod merkle_storage;
 pub mod operations_storage;
@@ -433,7 +433,6 @@ pub mod tests_common {
                 context_action_storage::ContextActionByBlockHashIndex::descriptor(&cache),
                 context_action_storage::ContextActionByContractIndex::descriptor(&cache),
                 context_action_storage::ContextActionByTypeIndex::descriptor(&cache),
-                MerkleStorage::descriptor(&cache),
                 SystemStorage::descriptor(&cache),
                 Sequences::descriptor(&cache),
                 DatabaseBackedSkipList::descriptor(&cache),
