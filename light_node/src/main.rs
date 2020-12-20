@@ -24,7 +24,6 @@ use shell::peer_manager::PeerManager;
 use shell::shell_channel::{ShellChannel, ShellChannelTopic, ShuttingDown};
 use storage::{block_storage, BlockMetaStorage, BlockStorage, ChainMetaStorage, check_database_compatibility, context_action_storage, ContextActionStorage, MempoolStorage, OperationsMetaStorage, OperationsStorage, resolve_storage_init_chain_data, StorageInitInfo, SystemStorage};
 use storage::context::TezedgeContext;
-use storage::merkle_storage::MerkleStorage;
 use storage::persistent::{CommitLogSchema, KeyValueSchema, open_cl, open_kv, PersistentStorage};
 use storage::persistent::sequence::Sequences;
 use tezos_api::environment;

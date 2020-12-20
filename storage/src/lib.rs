@@ -31,6 +31,7 @@ pub use crate::persistent::database::{Direction, IteratorMode};
 use crate::persistent::sequence::SequenceError;
 pub use crate::system_storage::SystemStorage;
 
+pub mod kv_store;
 pub mod in_memory;
 pub mod persistent;
 pub mod merkle_storage;

@@ -57,7 +57,9 @@ use serde::Serialize;
 
 use crypto::hash::HashType;
 
-use crate::in_memory::{KVStore, KVStoreWriteBatch, KVStoreError};
+use crate::kv_store::{
+    KVStore as KVStoreBase, WriteBatch, ApplyBatch,
+    BasicWriteBatch, KVStoreError};
 use crate::persistent::BincodeEncoded;
 use crate::context_action_storage::{ContextAction, ContextActionStorage};
 
@@ -99,9 +101,34 @@ enum Entry {
     Commit(Commit),
 }
 
-// TODO: create `KVStore` trait to better abstract things
-pub type MerkleStorageKVStore = KVStore<EntryHash, Vec<u8>>;
+pub trait KVStore:
+    KVStoreBase<
+        Error = MerkleStorageKVStoreError,
+        Key = EntryHash,
+        Value = ContextValue>
+    + ApplyBatch<BasicWriteBatch<EntryHash, ContextValue>, MerkleStorageKVStoreError>
+    + Send
+    + Sync
+{
+}
+
+/// required since `KVStore` that is declared above isn't implemented
+/// for types that implement [crate::kv_Store::KVStore] and [crate::kv_store::ApplyBatch].
+/// must be same as above.
+impl<T> KVStore for T
+where T:
+    KVStoreBase<
+        Error = MerkleStorageKVStoreError,
+        Key = EntryHash,
+        Value = ContextValue>
+    + ApplyBatch<BasicWriteBatch<EntryHash, ContextValue>, MerkleStorageKVStoreError>
+    + Send
+    + Sync
+{
+}
+
 pub type MerkleStorageKVStoreError = KVStoreError;
+pub type MerkleStorageKVStore = Box<dyn KVStore>;
 
 pub struct MerkleStorage {
     /// tree with current staging area (currently checked out context)
@@ -612,13 +639,13 @@ impl MerkleStorage {
     /// Persists an entry and its descendants from staged area to database on disk.
     fn persist_staged_entry_to_db(&mut self, entry: &Entry) -> Result<(), MerkleError> {
         // batch containing DB key values to persist
-        let mut batch = KVStoreWriteBatch::new();
+        let mut batch = BasicWriteBatch::new();
 
         // build list of entries to be persisted
         self.get_entries_recursively(entry, &mut batch)?;
 
         // atomically write all entries in one batch to DB
-        self.db.write_batch(batch)?;
+        self.db.apply_batch(batch)?;
 
         Ok(())
     }
@@ -627,13 +654,13 @@ impl MerkleStorage {
     fn get_entries_recursively(
         &self,
         entry: &Entry,
-        batch: &mut KVStoreWriteBatch<EntryHash, Vec<u8>>,
+        batch: &mut BasicWriteBatch<EntryHash, ContextValue>,
     ) -> Result<(), MerkleError> {
         // add entry to batch
-        self.db.put_batch(
-            batch,
+        batch.put(
             self.hash_entry(entry)?,
-            bincode::serialize(entry)?)?;
+            bincode::serialize(entry)?,
+        );
 
         match entry {
             Entry::Blob(_) => Ok(()),
@@ -799,7 +826,9 @@ mod tests {
     use super::*;
     use crate::in_memory::KVStore;
 
-    fn get_empty_storage() -> MerkleStorage { MerkleStorage::new(KVStore::new()) }
+    fn get_empty_storage() -> MerkleStorage {
+        MerkleStorage::new(Box::new(KVStore::new()))
+    }
 
     #[test]
     fn test_tree_hash() {
