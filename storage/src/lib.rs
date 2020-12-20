@@ -32,6 +32,7 @@ use crate::persistent::sequence::SequenceError;
 pub use crate::system_storage::SystemStorage;
 pub use crate::predecessor_storage::PredecessorStorage;
 
+pub mod kv_store;
 pub mod in_memory;
 pub mod persistent;
 pub mod merkle_storage;
