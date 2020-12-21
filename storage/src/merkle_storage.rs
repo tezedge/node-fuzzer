@@ -990,6 +990,31 @@ mod tests {
     }
 
     #[test]
+    fn test_persistence_over_reopens_for_sled_db() {
+        let db_name = "ms_test_persistence_over_reopens_for_sled_db";
+        let open_db = || sled::open(db_name).unwrap();
+        let get_storage = || MerkleStorage::new(Box::new(
+            crate::persistent::kv_store::KVStore::new(
+                open_db().open_tree("merkle").unwrap()
+            )
+        ));
+        { open_db().drop_tree("merkle").unwrap(); }
+
+        let key_abc: &ContextKey = &vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let commit1;
+        {
+            let mut storage = get_storage();
+            let key_abx: &ContextKey = &vec!["a".to_string(), "b".to_string(), "x".to_string()];
+            storage.set(key_abc, &vec![2 as u8]).unwrap();
+            storage.set(key_abx, &vec![3 as u8]).unwrap();
+            commit1 = storage.commit(0, "".to_string(), "".to_string()).unwrap();
+        }
+
+        let storage = get_storage();
+        assert_eq!(vec![2 as u8], storage.get_history(&commit1, &key_abc).unwrap());
+    }
+
+    #[test]
     fn test_get_errors() {
         let mut storage = get_empty_storage();
 
