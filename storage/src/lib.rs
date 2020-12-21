@@ -424,12 +424,13 @@ pub mod tests_common {
                 ContextActionStorage::descriptor(&cache),
                 ChainMetaStorage::descriptor(&cache),
             ], &cfg)?;
+            let sled_db = sled::open(&path).unwrap();
             let clog = open_cl(&path, vec![
                 BlockStorage::descriptor(),
             ])?;
 
             Ok(Self {
-                persistent_storage: PersistentStorage::new(Arc::new(kv), Arc::new(clog)),
+                persistent_storage: PersistentStorage::new(Arc::new(kv), Arc::new(sled_db), Arc::new(clog)),
                 path,
             })
         }

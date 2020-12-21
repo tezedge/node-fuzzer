@@ -199,6 +199,7 @@ pub struct MerklePerfStats {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct MerkleStorageStats {
+    // rocksdb_stats: RocksDBStats,
     map_stats: MerkleMapStats,
     pub perf_stats: MerklePerfStats,
 }
@@ -281,8 +282,9 @@ impl MerkleStorage {
         Ok(())
     }
 
+    #[inline]
     pub fn is_persisted(&self) -> bool {
-        true
+        self.db.is_persisted()
     }
 
     /// Get value from current staged root

@@ -435,6 +435,10 @@ fn main() {
         Ok(db) => Arc::new(db),
         Err(e) => shutdown_and_exit!(error!(log, "Failed to create RocksDB database at '{:?}'", &env.storage.db_path; "reason" => e), actor_system)
     };
+    let sled_db = match sled::open(&env.storage.db_path) {
+        Ok(db) => Arc::new(db),
+        Err(e) => shutdown_and_exit!(error!(log, "Failed to create Sled database at '{:?}', reason: {:?}", &env.storage.db_path, e;), actor_system)
+    };
     debug!(log, "Loaded RocksDB database");
 
     match check_database_compatibility(rocks_db.clone(), DATABASE_VERSION, &tezos_env, &log) {
@@ -453,7 +457,7 @@ fn main() {
             Err(e) => shutdown_and_exit!(error!(log, "Failed to open commit logs"; "reason" => e), actor_system)
         };
 
-        let persistent_storage = PersistentStorage::new(rocks_db, commit_logs);
+        let persistent_storage = PersistentStorage::new(rocks_db, sled_db, commit_logs);
 
         // restore merkle tree from persistant store if it isn't persisted.
         {
