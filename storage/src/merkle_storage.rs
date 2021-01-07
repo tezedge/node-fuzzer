@@ -845,7 +845,7 @@ impl MerkleStorage {
 
             }
         }
-        
+
         // clear list of actions
         self.actions = Arc::new(Vec::new());
 
@@ -877,7 +877,7 @@ impl MerkleStorage {
                 }
             }
         }
-       
+
         // root tree is always in staging area
         let root_idx = self.staged_get_idx(&root_hash).unwrap();
 
@@ -1469,7 +1469,7 @@ mod tests {
     #[test]
     fn test_hash_of_value_1_blob() {
         let expected_hash = "407f958990678e2e9fb06758bc6520dae46d838d39948a4c51a5b19bd079293d".to_string();
-        
+
         // hash is calculated as <length of data (8 bytes)><data>
         let blob = vec![1];
 
@@ -1607,7 +1607,7 @@ mod tests {
         let string_value = "61";
         let hash_length = "0000000000000020";
         let hash = "407f958990678e2e9fb06758bc6520dae46d838d39948a4c51a5b19bd079293d";
-   
+
         println!("calculating hash of tree: \n\t{:?}\n", dummy_tree);
         println!("[hex] child nodes count: {}", child_nodes);
         println!("[hex] leaf_node        : {}", leaf_node);
@@ -1615,7 +1615,7 @@ mod tests {
         println!("[hex] string_value     : {}", string_value);
         println!("[hex] hash_length      : {}", hash_length);
         println!("[hex] hash             : {}", hash);
-        
+
         bytes += &child_nodes;
         bytes += &leaf_node;
         bytes += &string_length;
@@ -1624,7 +1624,7 @@ mod tests {
         bytes += &hash;
 
         println!("manually calculated haxedemical representation of tree: {}", bytes);
-        
+
         let mut hasher = VarBlake2b::new(HASH_LEN).unwrap();
         hasher.update(hex::decode(bytes).unwrap());
         let calculated_tree_hash = hasher.finalize_boxed();
