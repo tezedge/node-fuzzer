@@ -55,6 +55,21 @@ pub fn open_kv<P, I>(path: P, cfs: I, cfg: &DbConfiguration) -> Result<DB, DBErr
         .map_err(DBError::from)
 }
 
+/// Open RocksDB database Readonly at given path with specified Column Family configurations
+///
+/// # Arguments
+/// * `path` - Path to open RocksDB
+/// * `cfs` - Iterator of Column Family descriptors
+pub fn open_kv_readonly<P, I, N>(path: P, cfs: I, cfg: &DbConfiguration) -> Result<DB, DBError>
+    where
+        P: AsRef<Path>,
+        I: IntoIterator<Item=N>,
+        N: AsRef<str>
+{
+    DB::open_cf_for_read_only(&default_kv_options(cfg), path, cfs, false)
+        .map_err(DBError::from)
+}
+
 /// Create default database configuration options,
 /// based on recommended setting: https://github.com/facebook/rocksdb/wiki/Setup-Options-and-Basic-Tuning#other-general-options
 fn default_kv_options(cfg: &DbConfiguration) -> Options {
