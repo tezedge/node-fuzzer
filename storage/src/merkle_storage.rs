@@ -56,6 +56,7 @@ use failure::Fail;
 use rocksdb::{Cache, ColumnFamilyDescriptor, WriteBatch};
 use serde::Deserialize;
 use serde::Serialize;
+use crate::context_action_storage::{ContextAction, ContextActionStorage};
 
 use crypto::hash::HashType;
 
@@ -261,7 +262,8 @@ impl KeyValueSchema for MerkleStorage {
 
     #[inline]
     fn name() -> &'static str {
-        "merkle_storage"
+        // tmp storage for merkle
+        "merkle_storage_test1"
     }
 }
 
@@ -361,6 +363,64 @@ impl MerkleStorage {
             },
             actions: Arc::new(Vec::new()),
         }
+    }
+
+    pub fn apply_context_action(&mut self, context_action: &ContextAction) -> Result<(), MerkleError> {
+        match context_action {
+            ContextAction::Set { key, value, ignored, .. } => {
+                if !ignored {
+                    self.set(&key, &value)?;
+                }
+            }
+            ContextAction::Copy { to_key, from_key, ignored, .. } => {
+                if !ignored {
+                    self.copy(&from_key, &to_key)?;
+                }
+            }
+            ContextAction::Delete { key, ignored, .. } => {
+                if !ignored {
+                    self.delete(&key)?;
+                }
+            }
+            ContextAction::RemoveRecursively { key, ignored, .. } => {
+                if !ignored {
+                    self.delete(&key)?;
+                }
+            }
+            ContextAction::Commit { author, message, date, new_context_hash, .. } => {
+                let commit_hash = self.commit(*date as u64, author.to_string(), message.to_string())?;
+                assert_eq!(
+                    &commit_hash,
+                    &new_context_hash[..],
+                    "Invalid commit_hash detected while applying context action to MerkleStorage, expected: {}, but was: {}",
+                    HashType::ContextHash.hash_to_b58check(&new_context_hash),
+                    HashType::ContextHash.hash_to_b58check(&commit_hash),
+                );
+            }
+            ContextAction::Checkout { context_hash, .. } => {
+                self.checkout(context_hash.as_slice().try_into()?)?;
+            }
+            ContextAction::Get { key, value, .. } => {
+                let err_key = "data/contracts/index/73/13/07/52/ec/2f/00005db1ee81706d1f1ca135141778a23df1b6864db6/balance";
+                if key.join("/") == err_key {
+                    println!("GET err_key value: {:?}", &self.get(key)?)
+                }
+                assert_eq!(
+                    &self.get(key)?,
+                    value,
+                    "Invalid result detected while applying context action to Get the key: {}",
+                    key.join("/")
+                );
+            }
+            ContextAction::Mem { key, value, .. } => {
+                assert_eq!(&self.mem(key)?, value);
+            }
+            ContextAction::DirMem { key, value, .. } => {
+                assert_eq!(&self.dirmem(key)?, value);
+            }
+            _ => {}
+        };
+        Ok(())
     }
 
     /// Get value from current staged root

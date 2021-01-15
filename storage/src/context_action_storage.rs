@@ -12,7 +12,7 @@ use rocksdb::{Cache, ColumnFamilyDescriptor, SliceTransform};
 use serde::{Deserialize, Serialize};
 
 use crypto::hash::{BlockHash, HashType};
-use tezos_context::channel::ContextAction;
+pub use tezos_context::channel::ContextAction;
 use tezos_messages::base::signature_public_key_hash::{ConversionError, SignaturePublicKeyHash};
 
 use crate::num_from_slice;
