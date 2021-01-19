@@ -486,6 +486,14 @@ fn hash_commit(commit: &Commit) -> Result<EntryHash, MerkleError> {
     Ok(hasher.finalize_boxed().as_ref().try_into()?)
 }
 
+fn hash_entry(entry: &Entry) -> Result<EntryHash, MerkleError> {
+    match entry {
+        Entry::Commit(commit) => hash_commit(&commit),
+        Entry::Tree(tree) => hash_tree(&tree),
+        Entry::Blob(blob) => hash_blob(blob),
+    }
+}
+
 #[derive(Debug, Fail)]
 pub enum CheckEntryHashError {
     #[fail(display = "MerkleError error: {:?}", error)]
@@ -1333,7 +1341,7 @@ impl MerkleStorage {
     }
 
     fn persist_staged_entry_to_db(&mut self, entry: &Entry) -> Result<(), MerkleError> {
-        let entry_hash = self.hash_entry(entry)?;
+        let entry_hash = hash_entry(entry)?;
         self.db.put(
             entry_hash.clone(),
             bincode::serialize(entry)?,
@@ -1360,14 +1368,6 @@ impl MerkleStorage {
                     Ok(entry) => self.persist_staged_entry_to_db(&entry),
                 }
             }
-        }
-    }
-
-    fn hash_entry(&self, entry: &Entry) -> Result<EntryHash, MerkleError> {
-        match entry {
-            Entry::Commit(commit) => hash_commit(&commit),
-            Entry::Tree(tree) => hash_tree(&tree),
-            Entry::Blob(blob) => hash_blob(blob),
         }
     }
 
