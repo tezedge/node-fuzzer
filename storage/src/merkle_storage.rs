@@ -49,7 +49,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::hash::Hash;
 use std::time::Instant;
-use std::sync::{mpsc, Arc, RWLock};
+use std::sync::{mpsc, Arc, RwLock};
 use std::ops::{Deref, DerefMut};
 use std::iter::FromIterator;
 use hex;
@@ -1643,7 +1643,7 @@ mod tests {
     use crate::context_key;
 
     fn get_empty_storage() -> MerkleStorage {
-        MerkleStorage::new(Box::new(KVStore::new()))
+        MerkleStorage::new()
     }
 
     fn get_tree_hash(storage: &MerkleStorage, root: &Tree, path: &ContextKey) -> EntryHash {
