@@ -1444,7 +1444,7 @@ impl MerkleStorage {
     }
 
     /// Blocks until gc finishes. Useful for testing.
-    pub(crate) wait_for_gc_finish(&self) {
+    pub(crate) fn wait_for_gc_finish(&self) {
         self.db.wait_for_gc_finish();
     }
 }
