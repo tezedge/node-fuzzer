@@ -82,7 +82,7 @@ impl KVStoreTrait for KVStore<EntryHash, ContextValue> {
     }
 }
 
-impl Drop for KVStore<EntryHash, ContextValue> {
+impl<K: Ord, V> Drop for KVStore<K, V> {
     fn drop(&mut self) {
         dbg!(self.kv_map.len());
     }
