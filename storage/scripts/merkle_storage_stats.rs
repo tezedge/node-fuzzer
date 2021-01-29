@@ -140,17 +140,25 @@ fn gen_stats(args: Args) {
             // }
 
             match &action {
-                ContextAction::Set { key, value, .. } => {
-                    merkle.set(&key, &value).unwrap();
+                ContextAction::Set { key, value, ignored, .. } => {
+                    if !ignored {
+                        merkle.set(&key, &value).unwrap();
+                    }
                 }
-                ContextAction::Copy { to_key, from_key, .. } => {
-                    merkle.copy(&from_key, &to_key).unwrap();
+                ContextAction::Copy { to_key, from_key, ignored, .. } => {
+                    if !ignored {
+                        merkle.copy(&from_key, &to_key).unwrap();
+                    }
                 }
-                ContextAction::Delete { key, .. } => {
-                    merkle.delete(&key).unwrap();
+                ContextAction::Delete { key, ignored, .. } => {
+                    if !ignored {
+                        merkle.delete(&key).unwrap();
+                    }
                 }
-                ContextAction::RemoveRecursively { key, .. } => {
-                    merkle.delete(&key).unwrap();
+                ContextAction::RemoveRecursively { key, ignored, .. } => {
+                    if !ignored {
+                        merkle.delete(&key).unwrap();
+                    }
                 }
                 ContextAction::Commit { author, message, date, new_context_hash, .. } => {
                     let commit_hash = merkle.commit(*date as u64, author.to_string(), message.to_string()).unwrap();
