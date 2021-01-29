@@ -82,4 +82,10 @@ impl KVStoreTrait for KVStore<EntryHash, ContextValue> {
     }
 }
 
+impl Drop for KVStore<EntryHash, ContextValue> {
+    fn drop(&mut self) {
+        dbg!(self.kv_map.len());
+    }
+}
+
 pub type BTreeMapBackend = KVStore<EntryHash, ContextValue>;
