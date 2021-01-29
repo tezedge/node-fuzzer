@@ -209,6 +209,7 @@ fn kvstore_gc_thread_fn<T: KVStore>(
 
         match msg {
             Some(CmdMsg::StartNewCycle) => {
+                dbg!(reused_keys.len());
                 reused_keys.push(Default::default());
             }
             Some(CmdMsg::Exit) => {
