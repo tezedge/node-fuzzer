@@ -241,7 +241,7 @@ fn kvstore_gc_thread_fn<T: KVStore>(
         }
 
         if todo_keys.len() > 0 {
-            let processed_len = todo_keys.len().min(4096);
+            let processed_len = todo_keys.len().min(8192);
 
             let mut stats = stores_stats.lock().unwrap();
             let mut stores = stores.write().unwrap();
