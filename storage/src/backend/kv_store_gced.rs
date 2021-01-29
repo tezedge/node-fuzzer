@@ -244,7 +244,7 @@ fn kvstore_gc_thread_fn<T: KVStore>(
             let mut stats = stores_stats.lock().unwrap();
             let mut stores = stores.write().unwrap();
 
-            let max_iter = if stores.len() - len <= 1 { 256 } else { usize::MAX };
+            let max_iter = if stores.len() - len <= 1 { 2048 } else { usize::MAX };
 
             for _ in 0..max_iter {
                 let key = match todo_keys.pop() {
