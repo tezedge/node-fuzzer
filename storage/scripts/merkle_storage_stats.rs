@@ -105,6 +105,7 @@ impl Args {
 }
 
 fn main() {
+    rayon::ThreadPoolBuilder::new().num_threads(2).build_global().unwrap();
     gen_stats(Args::read_args());
 }
 
