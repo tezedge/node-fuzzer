@@ -225,14 +225,28 @@ impl Iterator for ActionsFileReader {
             }
         };
         let mut h = [0_u8; 4];
-        self.reader.read_exact(&mut h).unwrap();
+        //stops iteration when content length size cannot be read correctly
+        match self.reader.read_exact(&mut h) {
+            Ok(_) => {}
+            Err(_) => {
+                return None
+            }
+        };
         let content_len = u32::from_be_bytes(h);
         if content_len <= 0 {
             return None;
         }
         let mut b = BytesMut::with_capacity(content_len as usize);
         unsafe { b.set_len(content_len as usize) }
-        self.reader.read_exact(&mut b).unwrap();
+        
+        //stops iteration when content length doesnt match exactly
+        match self.reader.read_exact(&mut b){
+            Ok(_) => {}
+            Err(_) => {
+                return None
+            }
+        };
+        
 
         let mut reader = snap::read::FrameDecoder::new(b.reader());
 
