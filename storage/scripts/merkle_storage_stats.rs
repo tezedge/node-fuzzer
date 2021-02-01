@@ -162,11 +162,7 @@ fn gen_stats(args: Args) {
                     }
                 }
                 ContextAction::Commit { author, message, date, new_context_hash, .. } => {
-                    let commit_hash = merkle.commit(*date as u64, author.to_string(), message.to_string()).unwrap();
-                    assert_eq!(
-                        &commit_hash,
-                        &new_context_hash[..],
-                    );
+                    merkle.commit(*date as u64, author.to_string(), message.to_string()).unwrap();
                 }
                 ContextAction::Checkout { context_hash, .. } => {
                     merkle.checkout(context_hash.as_slice().try_into().unwrap()).unwrap();

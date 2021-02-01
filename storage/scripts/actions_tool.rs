@@ -121,7 +121,6 @@ pub enum ContextAction {
     Shutdown,
 }
 
-
 impl std::fmt::Display for ActionsFileHeader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut formatter: String = String::new();
