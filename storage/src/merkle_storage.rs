@@ -1328,7 +1328,7 @@ impl MerkleStorage {
             entry_hash.clone(),
             bincode::serialize(entry)?,
         )?;
-        self.db.mark_reused(entry_hash);
+        // self.db.mark_reused(entry_hash);
 
         match entry {
             Entry::Blob(_) => Ok(()),
