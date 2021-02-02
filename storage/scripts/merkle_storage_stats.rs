@@ -136,51 +136,52 @@ fn gen_stats(args: Args) {
         let actions_len = actions.len();
 
         for action in actions.into_iter() {
-            // if let ContextAction::Commit { new_context_hash, .. } = &action {
-            //     cycle_commit_hashes.last_mut().unwrap().push(
-            //         new_context_hash[..].try_into().unwrap()
-            //     );
-            // }
+            if !action.perform { continue; }
 
-            // match &action {
-            //     ContextAction::Set { key, value, ignored, .. } => {
-            //         if !ignored {
-            //             merkle.set(&key, &value).unwrap();
-            //         }
-            //     }
-            //     ContextAction::Copy { to_key, from_key, ignored, .. } => {
-            //         if !ignored {
-            //             merkle.copy(&from_key, &to_key).unwrap();
-            //         }
-            //     }
-            //     ContextAction::Delete { key, ignored, .. } => {
-            //         if !ignored {
-            //             merkle.delete(&key).unwrap();
-            //         }
-            //     }
-            //     ContextAction::RemoveRecursively { key, ignored, .. } => {
-            //         if !ignored {
-            //             merkle.delete(&key).unwrap();
-            //         }
-            //     }
-            //     ContextAction::Commit { author, message, date, new_context_hash, .. } => {
-            //         let commit_hash = merkle.commit(*date as u64, author.to_string(), message.to_string()).unwrap();
-            //         assert_eq!(
-            //             &commit_hash,
-            //             &new_context_hash[..],
-            //             "Invalid commit_hash detected while applying context action to MerkleStorage, expected: {}, but was: {}",
-            //             HashType::ContextHash.hash_to_b58check(&new_context_hash),
-            //             HashType::ContextHash.hash_to_b58check(&commit_hash),
-            //         );
-            //     }
-            //     ContextAction::Checkout { context_hash, .. } => {
-            //         merkle.checkout(context_hash.as_slice().try_into().unwrap()).unwrap();
-            //     }
-            //     _ => {}
-            // };
-            if action.perform {
-                merkle.apply_context_action(&action.action).unwrap();
-            }
+            match &action.action {
+                ContextAction::Set { key, value, .. } => {
+                    if key == &vec!["test_chain".to_owned()] { dbg!(&action.action); }
+                    merkle.set(&key, &value).unwrap();
+                }
+                ContextAction::Copy { to_key, from_key, .. } => {
+                    if to_key == &vec!["test_chain".to_owned()] { dbg!(&action.action); }
+                    merkle.copy(&from_key, &to_key).unwrap();
+                }
+                ContextAction::Delete { key, .. } => {
+                    if key == &vec!["test_chain".to_owned()] { dbg!(&action.action); }
+                    merkle.delete(&key).unwrap();
+                }
+                ContextAction::RemoveRecursively { key, .. } => {
+                    if key == &vec!["test_chain".to_owned()] { dbg!(&action.action); }
+                    merkle.delete(&key).unwrap();
+                }
+                ContextAction::Commit { author, message, date, new_context_hash, .. } => {
+                    let commit_hash = merkle.commit(*date as u64, author.to_string(), message.to_string()).unwrap();
+                    assert_eq!(
+                        &commit_hash,
+                        &new_context_hash[..],
+                        "Invalid commit_hash detected while applying context action to MerkleStorage, expected: {}, but was: {}",
+                        HashType::ContextHash.hash_to_b58check(&new_context_hash),
+                        HashType::ContextHash.hash_to_b58check(&commit_hash),
+                    );
+                }
+                ContextAction::Checkout { context_hash, .. } => {
+                    merkle.checkout(context_hash.as_slice().try_into().unwrap()).unwrap();
+                }
+                ContextAction::Get { key, value, .. } => {
+                    if key == &vec!["test_chain".to_owned()] { dbg!(&action.action); }
+                    assert_eq!(&merkle.get(key).unwrap(), value, "expected {:?}: {:?}", key,value);
+                }
+                ContextAction::Mem { key, value, .. } => {
+                    if key == &vec!["test_chain".to_owned()] { dbg!(&action.action); }
+                    assert_eq!(&merkle.mem(key).unwrap(), value, "expected {:?}: {:?}", key,value);
+                }
+                ContextAction::DirMem { key, value, .. } => {
+                    if key == &vec!["test_chain".to_owned()] { dbg!(&action.action); }
+                    assert_eq!(&merkle.dirmem(key).unwrap(), value,"expected {:?}: {:?}", key,value );
+                }
+                _ => {}
+            };
         }
 
         let stats = merkle.get_merkle_stats().unwrap();
