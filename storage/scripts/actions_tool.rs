@@ -1,129 +1,63 @@
-use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::fs::{File, OpenOptions};
-use std::error::Error;
-use std::path::{Path};
-use bytes::{BytesMut, Buf, BufMut};
-// use bytes::buf::BufExt;
+use bytes::{Buf, BufMut, BytesMut};
 use std::fmt::Formatter;
-use crate::context_action_storage::ContextAction;
-use serde::{Serialize, Deserialize};
+use std::error::Error;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+use std::path::Path;
+use tezos_context::channel::ContextActionMessage;
 
-const HEADER_LEN: usize = 12;
-type Hash = Vec<u8>;
+use crypto::hash::HashType;
+use serde::{Deserialize, Serialize};
+
+const HEADER_LEN: usize = 44;
+const BLOCK_HASH_HEADER_LEN: usize = 32;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Block {
-    pub block_level : u32,
-    pub block_hash : String
+    pub block_level: u32,
+    pub block_hash_hex: String,
+    pub block_hash: [u8; BLOCK_HASH_HEADER_LEN],
+    pub predecessor: [u8; BLOCK_HASH_HEADER_LEN],
+}
+
+impl Block {
+    pub fn new(block_level: u32, raw_block_hash: Vec<u8>, raw_predecessor: Vec<u8>) -> Self {
+        let block_hash_hex = hex::encode(&raw_block_hash);
+        let mut predecessor = [0_u8; BLOCK_HASH_HEADER_LEN];
+        copy_hash_to_slice(raw_predecessor, &mut predecessor);
+        let mut block_hash = [0_u8; BLOCK_HASH_HEADER_LEN];
+        copy_hash_to_slice(raw_block_hash, &mut block_hash);
+        Block {
+            block_level,
+            block_hash_hex,
+            predecessor,
+            block_hash,
+        }
+    }
+}
+
+fn copy_hash_to_slice(from: Vec<u8>, to: &mut [u8; BLOCK_HASH_HEADER_LEN]) {
+    let mut bytes = BytesMut::with_capacity(BLOCK_HASH_HEADER_LEN);
+    bytes.put_slice(&from);
+    let _ = bytes.reader().read_exact(to);
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct ActionsFileHeader {
+    pub current_block_hash: [u8; BLOCK_HASH_HEADER_LEN],
     pub block_height: u32,
     pub actions_count: u32,
     pub block_count: u32,
 }
 
-// #[derive(Serialize, Deserialize, Clone, Debug)]
-// pub enum ContextAction {
-//     Set {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         key: Vec<String>,
-//         value: Vec<u8>,
-//         value_as_json: Option<String>,
-//         ignored: bool,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     Delete {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         key: Vec<String>,
-//         ignored: bool,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     RemoveRecursively {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         key: Vec<String>,
-//         ignored: bool,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     Copy {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         from_key: Vec<String>,
-//         to_key: Vec<String>,
-//         ignored: bool,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     Checkout {
-//         context_hash: Hash,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     Commit {
-//         parent_context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         new_context_hash: Hash,
-//         author: String,
-//         message: String,
-//         date: i64,
-//         parents: Vec<Vec<u8>>,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     Mem {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         key: Vec<String>,
-//         value: bool,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     DirMem {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         key: Vec<String>,
-//         value: bool,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     Get {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         key: Vec<String>,
-//         value: Vec<u8>,
-//         value_as_json: Option<String>,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     Fold {
-//         context_hash: Option<Hash>,
-//         block_hash: Option<Hash>,
-//         operation_hash: Option<Hash>,
-//         key: Vec<String>,
-//         start_time: f64,
-//         end_time: f64,
-//     },
-//     /// This is a control event used to shutdown IPC channel
-//     Shutdown,
-// }
-
 impl std::fmt::Display for ActionsFileHeader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut formatter: String = String::new();
+        formatter.push_str(&format!(
+            "{:<24}{}\n",
+            "Block Hash:",
+            HashType::BlockHash.hash_to_b58check(&self.current_block_hash)
+        ));
         formatter.push_str(&format!("{:<24}{}\n", "Block Height:", self.block_height));
         formatter.push_str(&format!("{:<24}{}\n", "Block Count:", self.block_count));
         formatter.push_str(&format!("{:<24}{}", "Actions Count:", self.actions_count));
@@ -131,19 +65,21 @@ impl std::fmt::Display for ActionsFileHeader {
     }
 }
 
-
 impl From<[u8; HEADER_LEN]> for ActionsFileHeader {
-    fn from(v: [u8; 12]) -> Self {
+    fn from(v: [u8; HEADER_LEN]) -> Self {
         let mut bytes = BytesMut::with_capacity(v.len());
         bytes.put_slice(&v);
         let block_height = bytes.get_u32();
         let actions_count = bytes.get_u32();
         let block_count = bytes.get_u32();
+        let mut hash = [0_u8; BLOCK_HASH_HEADER_LEN];
+        let _ = bytes.reader().read_exact(&mut hash);
 
         ActionsFileHeader {
             block_height,
             actions_count,
             block_count,
+            current_block_hash: hash,
         }
     }
 }
@@ -154,26 +90,10 @@ impl ActionsFileHeader {
         bytes.put_u32(self.block_height);
         bytes.put_u32(self.actions_count);
         bytes.put_u32(self.block_count);
+        bytes.put_slice(&self.current_block_hash);
         bytes.to_vec()
     }
-    fn new() -> Self {
-        ActionsFileHeader {
-            block_height: 0,
-            actions_count: 0,
-            block_count: 0,
-        }
-    }
 }
-
-/// # ActionFileReader
-/// Reads actions binary file in `path`
-/// ## Examples
-/// ```
-/// use io::ActionsFileReader;
-///
-/// let reader = ActionsFileReader::new("./actions.bin").unwrap();
-/// println!("{}", reader.header());
-/// ```
 
 pub struct ActionsFileReader {
     header: ActionsFileHeader,
@@ -184,7 +104,11 @@ pub struct ActionsFileReader {
 
 impl ActionsFileReader {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
-        let mut file = OpenOptions::new().write(false).create(false).read(true).open(path)?;
+        let file = OpenOptions::new()
+            .write(false)
+            .create(false)
+            .read(true)
+            .open(path)?;
         let mut reader = BufReader::new(file);
         reader.seek(SeekFrom::Start(0)).unwrap();
         let mut h = [0_u8; HEADER_LEN];
@@ -212,48 +136,36 @@ impl ActionsFileReader {
 }
 
 impl Iterator for ActionsFileReader {
-    type Item = (Block, Vec<ContextAction>);
+    type Item = (Block, Vec<ContextActionMessage>);
 
     /// Return a tuple of a block and list action in the block
     fn next(&mut self) -> Option<Self::Item> {
         self.cursor = match self.reader.seek(SeekFrom::Start(self.cursor)) {
-            Ok(c) => {
-                c
-            }
+            Ok(c) => c,
             Err(_) => {
                 return None;
             }
         };
         let mut h = [0_u8; 4];
-        //stops iteration when content length size cannot be read correctly
-        match self.reader.read_exact(&mut h) {
+        match self.reader.read_exact(&mut h){
             Ok(_) => {}
             Err(_) => {
                 return None
             }
-        };
+        }
         let content_len = u32::from_be_bytes(h);
         if content_len <= 0 {
             return None;
         }
         let mut b = BytesMut::with_capacity(content_len as usize);
         unsafe { b.set_len(content_len as usize) }
-        
-        //stops iteration when content length doesnt match exactly
-        match self.reader.read_exact(&mut b){
-            Ok(_) => {}
-            Err(_) => {
-                return None
-            }
-        };
-        
+        let _ = self.reader.read_exact(&mut b);
 
-        let mut reader = snap::read::FrameDecoder::new(b.reader());
+        let reader = snap::read::FrameDecoder::new(b.reader());
 
-        let item = match bincode::deserialize_from::<_, (Block, Vec<ContextAction>)>(reader) {
-            Ok(item) => {
-                item
-            }
+        let item = match bincode::deserialize_from::<_, (Block, Vec<ContextActionMessage>)>(reader)
+        {
+            Ok(item) => item,
             Err(_) => {
                 return None;
             }

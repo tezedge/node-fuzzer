@@ -178,7 +178,9 @@ fn gen_stats(args: Args) {
             //     }
             //     _ => {}
             // };
-            merkle.apply_context_action(&action).unwrap();
+            if action.perform {
+                merkle.apply_context_action(&action.action).unwrap();
+            }
         }
 
         let stats = merkle.get_merkle_stats().unwrap();
