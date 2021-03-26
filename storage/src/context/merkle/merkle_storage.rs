@@ -554,6 +554,9 @@ impl MerkleStorage {
         // persist staged entries to db
         let mut batch: Vec<(EntryHash, ContextValue)> = Vec::new();
         self.get_entries_recursively(&entry, &mut batch)?;
+        // TEST: clear things here
+        self.trees = HashMap::new();
+        self.staged = HashMap::new();
         // write all entries at once (depends on backend)
         self.db.write_batch(batch)?;
 
