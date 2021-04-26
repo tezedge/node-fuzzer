@@ -25,8 +25,8 @@ use tezos_wrapper::service::{ProtocolController, ProtocolServiceError};
 
 use crate::chain_feeder::ChainFeederRef;
 use crate::peer_branch_bootstrapper::{
-    PeerBranchBootstrapper, PeerBranchBootstrapperConfiguration, StartBranchBootstraping,
-    UpdateBlockState, UpdateOperationsState,
+    PeerBranchBootstrapper, PeerBranchBootstrapperConfiguration, PeerBranchBootstrapperRef,
+    StartBranchBootstraping, UpdateBlockState, UpdateOperationsState,
 };
 use crate::shell_channel::ShellChannelRef;
 use crate::state::bootstrap_state::InnerBlockState;
@@ -41,9 +41,6 @@ use crate::validation;
 /// Note: if needed, cound be refactored to cfg and struct
 pub(crate) mod bootstrap_constants {
     use crate::state::peer_state::DataQueuesLimits;
-
-    /// We can controll speedup of downloading blocks from network
-    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT: i8 = 2;
 
     /// We can validate just few branches/head from one peer, so we limit it by this constant
     pub(crate) const MAX_BOOTSTRAP_BRANCHES_PER_PEER: usize = 2;
@@ -73,13 +70,16 @@ pub struct BlockchainState {
     block_meta_storage: BlockMetaStorage,
     ///persistent chain metadata storage
     chain_meta_storage: ChainMetaStorage,
-    // Operations storage
+    /// Operations storage
     operations_storage: OperationsStorage,
     /// Operations metadata storage
     operations_meta_storage: OperationsMetaStorage,
 
     /// Utility for managing different data requests (block, operations, block apply)
     requester: DataRequesterRef,
+
+    /// Actor resposible for bootstrapping branches of peers per one chain_id
+    peer_branch_bootstrapper: Option<PeerBranchBootstrapperRef>,
 
     /// Common shell channel
     shell_channel: ShellChannelRef,
@@ -102,6 +102,7 @@ impl BlockchainState {
                 OperationsMetaStorage::new(&persistent_storage),
                 block_applier,
             )),
+            peer_branch_bootstrapper: None,
             block_storage: BlockStorage::new(persistent_storage),
             block_meta_storage: BlockMetaStorage::new(persistent_storage),
             chain_meta_storage: ChainMetaStorage::new(persistent_storage),
@@ -115,6 +116,10 @@ impl BlockchainState {
 
     pub(crate) fn requester(&self) -> &DataRequesterRef {
         &self.requester
+    }
+
+    pub(crate) fn peer_branch_bootstrapper(&self) -> Option<&PeerBranchBootstrapperRef> {
+        self.peer_branch_bootstrapper.as_ref()
     }
 
     pub(crate) fn data_queues_limits(&self) -> DataQueuesLimits {
@@ -438,18 +443,14 @@ impl BlockchainState {
 
         // if we miss something, we will run "peer branch bootstrapper"
         if !missing_history.is_empty() {
-            if peer.peer_branch_bootstrapper.is_none() {
-                peer.peer_branch_bootstrapper = Some(
+            if self.peer_branch_bootstrapper.is_none() {
+                self.peer_branch_bootstrapper = Some(
                     PeerBranchBootstrapper::actor(
                         sys,
-                        peer.peer_id.clone(),
-                        peer.queues.clone(),
+                        self.chain_id.clone(),
                         self.requester.clone(),
                         self.shell_channel.clone(),
-                        self.block_meta_storage.clone(),
-                        self.operations_meta_storage.clone(),
                         PeerBranchBootstrapperConfiguration::new(
-                            bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT,
                             bootstrap_constants::MAX_BOOTSTRAP_BRANCHES_PER_PEER,
                             bootstrap_constants::MAX_BLOCK_APPLY_BATCH,
                         ),
@@ -460,10 +461,11 @@ impl BlockchainState {
                 );
             };
 
-            // start bootstrapping
-            if let Some(peer_branch_bootstrapper) = &peer.peer_branch_bootstrapper {
+            if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper.as_ref() {
                 peer_branch_bootstrapper.tell(
                     StartBranchBootstraping::new(
+                        peer.peer_id.clone(),
+                        peer.queues.clone(),
                         self.chain_id.clone(),
                         last_applied_block,
                         missing_history,
@@ -483,7 +485,6 @@ impl BlockchainState {
     /// Returns bool - true, if it is a new block or false for previosly stored
     pub fn process_block_header_from_peer(
         &mut self,
-        peer: &mut PeerState,
         received_block: &BlockHeaderWithHash,
         log: &Logger,
     ) -> Result<bool, StorageError> {
@@ -499,11 +500,11 @@ impl BlockchainState {
         let (are_operations_complete, _) = self.process_block_header_operations(received_block)?;
 
         // ping branch bootstrapper with received block and actual state
-        if let Some(peer_branch_bootstrapper) = &peer.peer_branch_bootstrapper {
+        if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper() {
             peer_branch_bootstrapper.tell(
                 UpdateBlockState::new(
-                    Arc::new(received_block.hash.clone()),
-                    Arc::new(received_block.header.predecessor().clone()),
+                    received_block.hash.clone(),
+                    received_block.header.predecessor().clone(),
                     InnerBlockState {
                         block_downloaded: true,
                         applied: block_metadata.is_applied(),
@@ -588,7 +589,6 @@ impl BlockchainState {
     /// Returns true, if new block is successfully downloaded by this call
     pub fn process_block_operations_from_peer(
         &mut self,
-        peer: &mut PeerState,
         block_hash: &BlockHash,
         message: &OperationsForBlocksMessage,
     ) -> Result<bool, StateError> {
@@ -605,11 +605,8 @@ impl BlockchainState {
 
         if are_operations_complete {
             // ping branch bootstrapper with received operations
-            if let Some(peer_branch_bootstrapper) = &peer.peer_branch_bootstrapper {
-                peer_branch_bootstrapper.tell(
-                    UpdateOperationsState::new(Arc::new(block_hash.clone())),
-                    None,
-                );
+            if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper.as_ref() {
+                peer_branch_bootstrapper.tell(UpdateOperationsState::new(block_hash.clone()), None);
             }
         }
 
