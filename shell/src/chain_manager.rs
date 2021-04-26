@@ -42,6 +42,7 @@ use crate::mempool::mempool_channel::{
 };
 use crate::mempool::mempool_state::MempoolState;
 use crate::mempool::CurrentMempoolStateStorageRef;
+use crate::peer_branch_bootstrapper::CleanPeerData;
 use crate::shell_channel::{
     AllBlockOperationsReceived, BlockReceived, InjectBlock, ShellChannelMsg, ShellChannelRef,
     ShellChannelTopic,
@@ -160,10 +161,21 @@ impl CurrentHead {
 struct Stats {
     /// Count of received blocks
     unseen_block_count: usize,
+    /// Count of received blocks with all operations
+    unseen_block_operations_count: usize,
     /// Last time when previously not seen block was received
     unseen_block_last: Instant,
     /// Last time when previously unseen operations were received
     unseen_block_operations_last: Instant,
+}
+
+impl Stats {
+    fn get_and_clear_unseen_block_headers_count(&mut self) -> usize {
+        std::mem::replace(&mut self.unseen_block_count, 0)
+    }
+    fn get_and_clear_unseen_block_operations_count(&mut self) -> usize {
+        std::mem::replace(&mut self.unseen_block_operations_count, 0)
+    }
 }
 
 /// Purpose of this actor is to perform chain synchronization.
@@ -315,10 +327,15 @@ impl ChainManager {
                 }
             }
             NetworkChannelMsg::PeerStalled(actor_uri) => {
-                if let Some(peer_state) = self.peers.remove(&actor_uri) {
-                    if let Some(peer_branch_bootstrapper) = peer_state.peer_branch_bootstrapper {
-                        ctx.system.stop(peer_branch_bootstrapper);
-                    }
+                // remove peer from inner state
+                if let Some(mut peer_state) = self.peers.remove(&actor_uri) {
+                    // clear innner state (not needed, it will be drop)
+                    peer_state.clear();
+                }
+                // tell bootstrapper to clean potential data
+                if let Some(peer_branch_bootstrapper) = self.chain_state.peer_branch_bootstrapper()
+                {
+                    peer_branch_bootstrapper.tell(CleanPeerData(actor_uri), None);
                 }
             }
             NetworkChannelMsg::PeerMessageReceived(received) => {
@@ -411,7 +428,6 @@ impl ChainManager {
                                     // now handle received header
                                     Self::process_downloaded_header(
                                         block_header_with_hash,
-                                        peer,
                                         stats,
                                         chain_state,
                                         shell_channel,
@@ -471,10 +487,11 @@ impl ChainManager {
                                     // update operations state
                                     let block_hash = operations.operations_for_block().hash();
                                     if chain_state.process_block_operations_from_peer(
-                                        peer,
                                         &block_hash,
                                         &operations,
                                     )? {
+                                        stats.unseen_block_operations_count += 1;
+
                                         // TODO: TE-369 - is this necessery?
                                         // notify others that new all operations for block were received
                                         let block_meta = block_meta_storage
@@ -546,7 +563,6 @@ impl ChainManager {
                                             // process downloaded block directly
                                             Self::process_downloaded_header(
                                                 message_current_head.clone(),
-                                                peer,
                                                 stats,
                                                 chain_state,
                                                 shell_channel,
@@ -843,14 +859,13 @@ impl ChainManager {
 
     fn process_downloaded_header(
         received_block: BlockHeaderWithHash,
-        peer: &mut PeerState,
         stats: &mut Stats,
         chain_state: &mut BlockchainState,
         shell_channel: &ShellChannelRef,
         log: &Logger,
     ) -> Result<(), Error> {
         // store header
-        if chain_state.process_block_header_from_peer(peer, &received_block, log)? {
+        if chain_state.process_block_header_from_peer(&received_block, log)? {
             // update stats for new header
             stats.unseen_block_last = Instant::now();
             stats.unseen_block_count += 1;
@@ -1018,6 +1033,7 @@ impl ChainManager {
 
                                 // update stats
                                 self.stats.unseen_block_operations_last = Instant::now();
+                                self.stats.unseen_block_operations_count += 1;
 
                                 // notify others that new all operations for block were received
                                 self.shell_channel.tell(
@@ -1348,6 +1364,7 @@ impl
             stats: Stats {
                 unseen_block_count: 0,
                 unseen_block_last: Instant::now(),
+                unseen_block_operations_count: 0,
                 unseen_block_operations_last: Instant::now(),
             },
             is_sandbox,
@@ -1483,9 +1500,11 @@ impl Receive<LogStats> for ChainManager {
             "remote_level" => remote_level,
             "remote_fitness" => remote_fitness);
         info!(log, "Blocks and operations info";
-            "block_count" => self.stats.unseen_block_count,
+            "last_received_block_headers_count" => self.stats.get_and_clear_unseen_block_headers_count(),
+            "last_received_block_operations_count" => self.stats.get_and_clear_unseen_block_operations_count(),
             "last_block_secs" => self.stats.unseen_block_last.elapsed().as_secs(),
-            "last_block_operations_secs" => self.stats.unseen_block_operations_last.elapsed().as_secs());
+            "last_block_operations_secs" => self.stats.unseen_block_operations_last.elapsed().as_secs(),
+            "peer_count" => self.peers.len());
         // TODO: TE-369 - peers stats
         for peer in self.peers.values() {
             debug!(log, "Peer state info";
@@ -1525,9 +1544,6 @@ impl Receive<LogStats> for ChainManager {
                 "current_head_level" => peer.current_head_level,
                 "current_head_update_secs" => peer.current_head_update_last.elapsed().as_secs());
         }
-        info!(log, "Various info";
-                   "peer_count" => self.peers.len(),
-        );
     }
 }
 
@@ -1630,11 +1646,6 @@ impl Receive<DisconnectStalledPeers> for ChainManager {
                 if should_disconnect {
                     // stop peer
                     ctx.system.stop(state.peer_id.peer_ref.clone());
-
-                    // stop peer's bootstrap
-                    if let Some(boot) = state.peer_branch_bootstrapper.as_ref() {
-                        ctx.system.stop(boot);
-                    }
                 }
             });
     }

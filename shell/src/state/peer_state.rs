@@ -19,7 +19,6 @@ use tezos_messages::p2p::encoding::prelude::{
     GetOperationsMessage, MetadataMessage, PeerMessageResponse,
 };
 
-use crate::peer_branch_bootstrapper::PeerBranchBootstrapperRef;
 use crate::state::synchronization_state::UpdateIsBootstrapped;
 use crate::state::StateError;
 
@@ -36,9 +35,6 @@ pub struct PeerState {
     pub(crate) mempool_enabled: bool,
     /// Is bootstrapped flag
     pub(crate) is_bootstrapped: bool,
-
-    /// Actor for managing current branch bootstrap from peer
-    pub(crate) peer_branch_bootstrapper: Option<PeerBranchBootstrapperRef>,
 
     /// Shareable data queues for scheduling of data download (blocks, operations)
     pub(crate) queues: Arc<DataQueues>,
@@ -84,7 +80,6 @@ impl PeerState {
             peer_id,
             mempool_enabled: !peer_metadata.disable_mempool(),
             is_bootstrapped: false,
-            peer_branch_bootstrapper: None,
             queues: Arc::new(DataQueues::new(limits)),
             missing_operations_for_blocks: HashMap::default(),
             missing_mempool_operations: Vec::new(),
@@ -151,6 +146,7 @@ impl PeerState {
         // self.queued_block_headers.clear();
         // self.queued_block_operations.clear();
         self.queued_mempool_operations.clear();
+        self.missing_operations_for_blocks.clear();
     }
 
     // TODO: TE-386 - remove not needed
@@ -350,6 +346,7 @@ impl Default for MessageStats {
 
 pub type MissingOperations = HashSet<i8>;
 
+#[derive(Clone, Debug)]
 pub struct DataQueues {
     pub(crate) limits: DataQueuesLimits,
 
