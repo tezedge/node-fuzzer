@@ -26,7 +26,8 @@ use crate::state::peer_state::DataQueues;
 use crate::state::synchronization_state::PeerBranchSynchronizationDone;
 use crate::state::ApplyBlockBatch;
 
-type BlockStateRef = BlockState;
+type BlockRef = Arc<BlockHash>;
+
 /// BootstrapState helps to easily manage/mutate inner state
 pub struct BootstrapState {
     /// Holds peers info
@@ -163,6 +164,7 @@ impl BootstrapState {
                 )
             })
     }
+
     pub fn add_new_branch(
         &mut self,
         peer_id: Arc<PeerId>,
@@ -173,13 +175,19 @@ impl BootstrapState {
         max_bootstrap_branches_per_peer: usize,
         log: &Logger,
     ) {
+        let BootstrapState {
+            peers,
+            block_state_db,
+        } = self;
+
         // add branch to inner state
-        if let Some(peer_state) = self.peers.get_mut(peer_id.peer_ref.uri()) {
+        if let Some(peer_state) = peers.get_mut(peer_id.peer_ref.uri()) {
             let mut was_merged = false;
             for branch in peer_state.branches.iter_mut() {
                 if branch.merge(to_level.clone(), &missing_history) {
                     was_merged = true;
                     peer_state.empty_bootstrap_state = None;
+                    block_state_db.insert_if_missing(&missing_history, || BlockState::new());
                     break;
                 }
             }
@@ -193,6 +201,10 @@ impl BootstrapState {
                     return;
                 }
 
+                block_state_db
+                    .insert_if_missing(&[last_applied_block.clone()], || BlockState::new_applied());
+                block_state_db.insert_if_missing(&missing_history, || BlockState::new());
+
                 peer_state.branches.push(BranchState::new(
                     last_applied_block,
                     missing_history,
@@ -200,8 +212,11 @@ impl BootstrapState {
                 ));
                 peer_state.empty_bootstrap_state = None;
             }
-
         } else {
+            block_state_db
+                .insert_if_missing(&[last_applied_block.clone()], || BlockState::new_applied());
+            block_state_db.insert_if_missing(&missing_history, || BlockState::new());
+
             self.peers.insert(
                 peer_id.peer_ref.uri().clone(),
                 PeerBootstrapState {
@@ -216,17 +231,26 @@ impl BootstrapState {
                     is_bootstrapped: false,
                 },
             );
-
         }
     }
 
-    pub fn schedule_blocks_to_download(&mut self, requester: &DataRequester, log: &Logger) {
+    pub fn schedule_blocks_to_download(
+        &mut self,
+        requester: &DataRequester,
+        max_bootstrap_interval_look_ahead_count: u8,
+        log: &Logger,
+    ) {
+        let BootstrapState {
+            peers,
+            block_state_db,
+        } = self;
+
         for PeerBootstrapState {
             peer_id,
             peer_queues,
             branches,
             ..
-        } in self.peers.values_mut()
+        } in peers.values_mut()
         {
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
@@ -248,8 +272,10 @@ impl BootstrapState {
                 }
                 branch.collect_next_blocks_to_download(
                     available_queue_capacity,
+                    max_bootstrap_interval_look_ahead_count,
                     &already_queued,
                     &mut missing_blocks,
+                    block_state_db,
                 );
                 available_queue_capacity = available_queue_capacity
                     .checked_sub(missing_blocks.len())
@@ -265,13 +291,23 @@ impl BootstrapState {
         }
     }
 
-    pub fn schedule_operations_to_download(&mut self, requester: &DataRequester, log: &Logger) {
+    pub fn schedule_operations_to_download(
+        &mut self,
+        requester: &DataRequester,
+        max_bootstrap_interval_look_ahead_count: u8,
+        log: &Logger,
+    ) {
+        let BootstrapState {
+            peers,
+            block_state_db,
+        } = self;
+
         for PeerBootstrapState {
             peer_id,
             peer_queues,
             branches,
             ..
-        } in self.peers.values_mut()
+        } in peers.values_mut()
         {
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
@@ -293,8 +329,10 @@ impl BootstrapState {
                 }
                 branch.collect_next_block_operations_to_download(
                     available_queue_capacity,
+                    max_bootstrap_interval_look_ahead_count,
                     &already_queued,
                     &mut missing_blocks,
+                    block_state_db,
                 );
                 available_queue_capacity = available_queue_capacity
                     .checked_sub(missing_blocks.len())
@@ -325,19 +363,11 @@ impl BootstrapState {
 
         for PeerBootstrapState { branches, .. } in peers.values_mut() {
             for branch in branches {
-                if let Some(batch) = branch.find_next_block_to_apply(max_block_apply_batch) {
+                if let Some(batch) =
+                    branch.find_next_block_to_apply(max_block_apply_batch, block_state_db)
+                {
                     // mark scheduled
                     block_state_db.mark_scheduled_for_apply(&batch);
-
-                    branch.intervals.iter_mut().for_each(|i| {
-                        i.blocks.iter_mut().for_each(|b| {
-                            if batch.block_to_apply.eq(&b.block_hash)
-                                || batch.successors.contains(&b.block_hash)
-                            {
-                                b.scheduled_for_apply = true;
-                            }
-                        })
-                    });
 
                     // schedule
                     requester.call_schedule_apply_block(
@@ -359,41 +389,56 @@ impl BootstrapState {
         let block_hash = Arc::new(block_hash);
         let predecessor_block_hash = Arc::new(predecessor_block_hash);
 
-        // update pipelines
-        self.peers.values_mut().for_each(|peer_state| {
+        let BootstrapState {
+            peers,
+            block_state_db,
+        } = self;
+
+        // update db
+        block_state_db.update_block(block_hash.clone(), predecessor_block_hash, new_state);
+
+        // update pipelines with predecessor
+        peers.values_mut().for_each(|peer_state| {
             peer_state.branches.iter_mut().for_each(|branch| {
-                branch.block_downloaded(&block_hash, &new_state, predecessor_block_hash.clone())
+                branch.block_downloaded(&block_hash, block_state_db);
             });
         });
-        // update db
-        self.block_state_db
-            .update_block(block_hash, predecessor_block_hash.clone(), new_state);
     }
 
     pub fn block_operations_downloaded(&mut self, block_hash: BlockHash) {
-        // update
-        self.peers.values_mut().for_each(|peer_state| {
+        let BootstrapState {
+            peers,
+            block_state_db,
+        } = self;
+
+        // update db
+        block_state_db.mark_block_operations_downloaded(&block_hash);
+
+        // update pipelines
+        peers.values_mut().for_each(|peer_state| {
             peer_state
                 .branches
                 .iter_mut()
-                .for_each(|branch| branch.block_operations_downloaded(&block_hash));
+                .for_each(|branch| branch.block_operations_downloaded(&block_hash, block_state_db));
         });
-
-        // update db
-        self.block_state_db
-            .mark_block_operations_downloaded(&block_hash);
     }
 
     pub fn block_applied(&mut self, block_hash: &BlockHash) {
-        // update
-        self.peers.values_mut().for_each(|peer_state| {
+        let BootstrapState {
+            peers,
+            block_state_db,
+        } = self;
+
+        // update db
+        block_state_db.mark_block_applied(&block_hash);
+
+        // update pipelines - this trimes branch intervals
+        peers.values_mut().for_each(|peer_state| {
             peer_state
                 .branches
                 .iter_mut()
-                .for_each(|branch| branch.block_applied(block_hash));
+                .for_each(|branch| branch.block_applied(block_hash, block_state_db));
         });
-        // update db
-        self.block_state_db.mark_block_applied(&block_hash);
     }
 
     pub fn check_bootstrapped_branches(&mut self, shell_channel: &ShellChannelRef, log: &Logger) {
@@ -407,7 +452,7 @@ impl BootstrapState {
                             "peer_id" => peer.peer_id_marker.clone(), "peer_ip" => peer.peer_address.to_string(), "peer" => peer.peer_ref.name(), "peer_uri" => peer.peer_ref.uri().to_string());
 
                         // send for peer just once
-                        if *is_bootstrapped == false {
+                        if !(*is_bootstrapped) {
                             *is_bootstrapped = true;
                             shell_channel.tell(
                                 Publish {
@@ -446,24 +491,21 @@ impl BranchState {
     /// Creates new pipeline, it must always start with applied block (at least with genesis),
     /// This block is used to define start of the branch
     pub fn new(
-        first_applied_block: Arc<BlockHash>,
+        start_block: Arc<BlockHash>,
         blocks: Vec<Arc<BlockHash>>,
         to_level: Arc<Level>,
     ) -> BranchState {
         BranchState {
-            intervals: BranchInterval::split(BlockState::new_applied(first_applied_block), blocks),
+            intervals: BranchInterval::split(start_block, blocks),
             to_level,
         }
     }
 
     /// Returns true if any interval contains requested block
     pub fn contains_block(&self, block: &BlockHash) -> bool {
-        self.intervals.iter().any(|interval| {
-            interval
-                .blocks
-                .iter()
-                .any(|b| b.block_hash.as_ref().eq(block))
-        })
+        self.intervals
+            .iter()
+            .any(|interval| interval.blocks.iter().any(|b| b.as_ref().eq(block)))
     }
 
     /// Tries to merge/extends existing bootstrap (optimization)
@@ -480,7 +522,7 @@ impl BranchState {
                 // we need to find this last block in new_bootstrap
                 if let Some(found_position) = new_missing_history
                     .iter()
-                    .position(|b| b.as_ref().eq(last_block.block_hash.as_ref()))
+                    .position(|b| b.as_ref().eq(last_block.as_ref()))
                 {
                     // check if we have more elements after found, means, we can add new interval
                     if (found_position + 1) < new_missing_history.len() {
@@ -507,12 +549,16 @@ impl BranchState {
     pub fn collect_next_blocks_to_download(
         &mut self,
         requested_count: usize,
+        max_bootstrap_interval_look_ahead_count: u8,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
+        block_state_db: &BlockStateDb,
     ) {
         if requested_count == 0 {
             return;
         }
+
+        let mut intervals_checked = 0;
 
         // lets iterate intervals
         for interval in self.intervals.iter_mut() {
@@ -521,11 +567,23 @@ impl BranchState {
                 continue;
             }
 
+            let count_before = blocks_to_download.len();
+
             // let walk throught interval and resolve first missing block
-            interval.collect_first_missing_block(ignored_blocks, blocks_to_download);
+            interval.collect_first_missing_block(
+                ignored_blocks,
+                blocks_to_download,
+                block_state_db,
+            );
+
+            if count_before != blocks_to_download.len() {
+                intervals_checked += 1;
+            }
 
             // check if we have enought
-            if blocks_to_download.len() >= requested_count {
+            if blocks_to_download.len() >= requested_count
+                || max_bootstrap_interval_look_ahead_count <= intervals_checked
+            {
                 break;
             }
         }
@@ -535,12 +593,16 @@ impl BranchState {
     pub fn collect_next_block_operations_to_download(
         &mut self,
         requested_count: usize,
+        max_bootstrap_interval_look_ahead_count: u8,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
+        block_state_db: &BlockStateDb,
     ) {
         if requested_count == 0 {
             return;
         }
+
+        let mut intervals_checked = 0;
 
         // lets iterate intervals
         for interval in self.intervals.iter_mut() {
@@ -549,14 +611,23 @@ impl BranchState {
                 continue;
             }
 
+            let count_before = blocks_to_download.len();
+
             // let walk throught interval and resolve missing block from this interval
             interval.collect_block_with_missing_operations(
                 requested_count,
                 &ignored_blocks,
                 blocks_to_download,
+                block_state_db,
             );
 
-            if blocks_to_download.len() >= requested_count {
+            if count_before != blocks_to_download.len() {
+                intervals_checked += 1;
+            }
+
+            if blocks_to_download.len() >= requested_count
+                || max_bootstrap_interval_look_ahead_count <= intervals_checked
+            {
                 return;
             }
         }
@@ -568,6 +639,7 @@ impl BranchState {
     pub fn find_next_block_to_apply(
         &mut self,
         max_block_apply_batch: usize,
+        block_state_db: &BlockStateDb,
     ) -> Option<ApplyBlockBatch> {
         let mut batch_for_apply: Option<ApplyBlockBatch> = None;
 
@@ -583,26 +655,37 @@ impl BranchState {
             // check all blocks in interval
             // get first non-applied block
             for b in interval.blocks.iter_mut() {
+                let block_state = match block_state_db.blocks.get(b) {
+                    Some(state) => state,
+                    None => {
+                        return None;
+                    }
+                };
+
                 // skip applied or already scheduled
-                if b.applied || b.scheduled_for_apply {
+                if block_state.applied || block_state.scheduled_for_apply {
                     // continue to check next block
-                    previous_block = Some((b.block_hash.clone(), b.applied, b.scheduled_for_apply));
+                    previous_block = Some((
+                        b.clone(),
+                        block_state.applied,
+                        block_state.scheduled_for_apply,
+                    ));
                     continue;
                 }
 
                 // if previous is the same as a block - can happen on the border of interevals
                 // where last block of previous interval is the first block of next interval
                 if let Some((previous_block_hash, ..)) = previous_block.as_ref() {
-                    if b.block_hash.as_ref().eq(previous_block_hash.as_ref()) {
+                    if b.as_ref().eq(previous_block_hash.as_ref()) {
                         // just continue, previous_block is the same and we processed it right before
                         continue;
                     }
                 }
 
                 // if block and operations are downloaded, we check his predecessor, if applied or scheduled for apply
-                if b.block_downloaded && b.operations_downloaded {
+                if block_state.block_downloaded && block_state.operations_downloaded {
                     // predecessor must match - continuos chain of blocks
-                    if let Some(block_predecessor) = b.predecessor_block_hash.as_ref() {
+                    if let Some(block_predecessor) = block_state.predecessor_block_hash.as_ref() {
                         if let Some((
                             previous_block_hash,
                             previous_is_applied,
@@ -615,27 +698,26 @@ impl BranchState {
                                 // if previos block is applied and b is not, then we have batch start candidate
                                 if *previous_is_applied || *previous_is_scheduled_for_apply {
                                     // start batch and continue to next blocks
-                                    batch_for_apply =
-                                        Some(ApplyBlockBatch::start_batch(b.block_hash.clone()));
+                                    batch_for_apply = Some(ApplyBlockBatch::start_batch(b.clone()));
 
                                     if max_block_apply_batch > 0 {
                                         // continue to check next block
                                         previous_block = Some((
-                                            b.block_hash.clone(),
-                                            b.applied,
-                                            b.scheduled_for_apply,
+                                            b.clone(),
+                                            block_state.applied,
+                                            block_state.scheduled_for_apply,
                                         ));
                                         continue;
                                     }
                                 } else if let Some(batch) = batch_for_apply.as_mut() {
                                     // if previous block is not applied, means we can add it to batch
-                                    batch.add_successor(b.block_hash.clone());
+                                    batch.add_successor(b.clone());
                                     if batch.successors_size() < max_block_apply_batch {
                                         // continue to check next block
                                         previous_block = Some((
-                                            b.block_hash.clone(),
-                                            b.applied,
-                                            b.scheduled_for_apply,
+                                            b.clone(),
+                                            block_state.applied,
+                                            block_state.scheduled_for_apply,
                                         ));
                                         continue;
                                     }
@@ -665,8 +747,99 @@ impl BranchState {
     pub fn block_downloaded(
         &mut self,
         requested_block_hash: &BlockHash,
-        requested_block_new_inner_state: &InnerBlockState,
-        predecessor_block_hash: Arc<BlockHash>,
+        block_state_db: &BlockStateDb,
+    ) {
+        // find first interval with this block
+        let interval_to_handle = self.intervals.iter_mut().find(|interval| {
+            // find first interval with this block
+            interval
+                .blocks
+                .iter()
+                .any(|b| b.as_ref().eq(requested_block_hash))
+        });
+
+        if let Some(interval) = interval_to_handle {
+            let mut predecessor_insert_to_index: Option<(usize, BlockRef)> = None;
+
+            // trying to insert predecessor before downloaded block, if not already
+            let mut previous: Option<&BlockRef> = None;
+            for (block_index, b) in interval.blocks.iter().enumerate() {
+                // find block
+                if requested_block_hash.eq(b.as_ref()) {
+                    let block_state = match block_state_db.blocks.get(b) {
+                        Some(state) => state,
+                        None => return,
+                    };
+
+                    // if applied, then skip
+                    if block_state.applied {
+                        break;
+                    }
+
+                    // if previous block is predecessor, everything is ok
+                    if let Some(previous_block) = previous {
+                        if let Some(block_predecessor) = block_state.predecessor_block_hash.as_ref()
+                        {
+                            if previous_block.eq(block_predecessor) {
+                                break;
+                            }
+                        }
+                    }
+
+                    // if previous block is not block's predecessor, we need to insert it there
+                    if let Some(predecessor) = block_state.predecessor_block_hash.as_ref() {
+                        predecessor_insert_to_index = Some((block_index, predecessor.clone()));
+                    }
+
+                    // block handled, just finish
+                    break;
+                }
+
+                previous = Some(b);
+            }
+
+            if let Some((predecessor_insert_to_index, predecessor_block_hash)) =
+                predecessor_insert_to_index
+            {
+                // we cannot add predecessor before begining of interval
+                if predecessor_insert_to_index > 0 {
+                    interval
+                        .blocks
+                        .insert(predecessor_insert_to_index, predecessor_block_hash);
+                }
+            }
+
+            // check if have downloaded whole interval
+            interval.check_all_blocks_downloaded(block_state_db);
+        }
+    }
+
+    /// Notify state requested_block_hash has all downloaded operations.
+    /// Just checks if interval can be marked as closed.
+    pub fn block_operations_downloaded(
+        &mut self,
+        requested_block_hash: &BlockHash,
+        block_state_db: &BlockStateDb,
+    ) {
+        self.intervals
+            .iter_mut()
+            .filter(|interval| {
+                // find first interval with this block
+                interval
+                    .blocks
+                    .iter()
+                    .any(|b| b.as_ref().eq(requested_block_hash))
+            })
+            .for_each(|interval| interval.check_all_operations_downloaded(block_state_db));
+    }
+
+    /// Notify state requested_block_hash has been applied
+    ///
+    /// <BM> callback wchic return (bool as downloaded, bool as applied, bool as are_operations_complete)
+    pub fn block_applied(
+        &mut self,
+        requested_block_hash: &BlockHash,
+        block_state_db: &BlockStateDb,
     ) {
         // find first interval with this block
         let interval_to_handle = self.intervals.iter_mut().enumerate().find(|(_, interval)| {
@@ -674,196 +847,16 @@ impl BranchState {
             interval
                 .blocks
                 .iter()
-                .filter(|b| !b.applied)
-                .any(|b| b.block_hash.as_ref().eq(requested_block_hash))
-        });
-
-        // Note:end_interval
-        let mut end_of_interval: Option<(usize, InnerBlockState)> = None;
-
-        if let Some((interaval_idx, interval)) = interval_to_handle {
-            let block_count = interval.blocks.len();
-            let mut predecessor_insert_to_index: Option<usize> = None;
-
-            // update metadata
-            for (block_index, b) in interval.blocks.iter_mut().enumerate() {
-                // update request block as downloaded
-                if requested_block_hash.eq(b.block_hash.as_ref()) {
-                    // if applied, then skip
-                    if b.applied {
-                        continue;
-                    }
-
-                    // update its state
-                    b.update(&requested_block_new_inner_state);
-                    b.update_predecessor(predecessor_block_hash.clone());
-
-                    predecessor_insert_to_index = Some(block_index);
-
-                    // Note:end_interval: handle end of the interval
-                    if (block_count - 1) == block_index {
-                        end_of_interval = Some((
-                            interaval_idx,
-                            InnerBlockState {
-                                block_downloaded: b.block_downloaded,
-                                operations_downloaded: b.operations_downloaded,
-                                applied: b.applied,
-                            },
-                        ));
-                    }
-
-                    break;
-                }
-            }
-
-            if let Some(predecessor_insert_to_index) = predecessor_insert_to_index {
-                // we cannot add predecessor before begining of interval
-                if predecessor_insert_to_index > 0 {
-                    // check if predecessor block is really our predecessor
-                    if let Some(potential_predecessor) =
-                        interval.blocks.get(predecessor_insert_to_index - 1)
-                    {
-                        // if not, we need to insert predecessor here
-                        if !potential_predecessor
-                            .block_hash
-                            .as_ref()
-                            .eq(&predecessor_block_hash)
-                        {
-                            interval.blocks.insert(
-                                predecessor_insert_to_index,
-                                BlockState::new(predecessor_block_hash),
-                            );
-                        }
-                    }
-                }
-            }
-
-            // check if have downloaded whole interval
-            interval.check_all_blocks_downloaded();
-        };
-
-        // Note:end_interval we need to copy this to beginging of the next interval
-        if let Some((interval_idx, end_of_previos_interval_state)) = end_of_interval {
-            if let Some(next_interval) = self.intervals.get_mut(interval_idx + 1) {
-                // get first block
-                if let Some(begin) = next_interval.blocks.get_mut(0) {
-                    begin.update(&end_of_previos_interval_state);
-                }
-
-                // check if have downloaded whole next interval
-                next_interval.check_all_blocks_downloaded();
-            }
-        }
-
-        // check, what if requested block is already applied (this removes all predecessor and/or the whole interval)
-        if requested_block_new_inner_state.applied {
-            self.block_applied(&requested_block_hash);
-        }
-    }
-
-    /// Notify state requested_block_hash has all downloaded operations
-    ///
-    /// <BM> callback wchic return (bool as downloaded, bool as applied, bool as are_operations_complete)
-    pub fn block_operations_downloaded(&mut self, requested_block_hash: &BlockHash) {
-        // find first interval with this block
-        let interval_to_handle = self.intervals.iter_mut().enumerate().find(|(_, interval)| {
-            // find first interval with this block
-            interval
-                .blocks
-                .iter()
-                .filter(|b| !b.applied)
-                .any(|b| b.block_hash.as_ref().eq(requested_block_hash))
-        });
-
-        // Note:end_interval
-        let mut end_of_interval: Option<(usize, InnerBlockState)> = None;
-
-        if let Some((interaval_idx, interval)) = interval_to_handle {
-            // find block and update metadata
-            let block_count = interval.blocks.len();
-            for (block_index, mut b) in interval.blocks.iter_mut().enumerate() {
-                // update request block as downloaded
-                if requested_block_hash.eq(b.block_hash.as_ref()) {
-                    // now we can update
-                    if !b.operations_downloaded {
-                        b.operations_downloaded = true;
-                    }
-
-                    // Note:end_interval: handle end of the interval
-                    if (block_count - 1) == block_index {
-                        end_of_interval = Some((
-                            interaval_idx,
-                            InnerBlockState {
-                                block_downloaded: b.block_downloaded,
-                                operations_downloaded: b.operations_downloaded,
-                                applied: b.applied,
-                            },
-                        ));
-                    }
-
-                    break;
-                }
-            }
-
-            interval.check_all_operations_downloaded();
-        };
-
-        // Note:end_interval we need to copy this to beginging of the next interval
-        if let Some((interval_idx, end_of_previos_interval_state)) = end_of_interval {
-            if let Some(next_interval) = self.intervals.get_mut(interval_idx + 1) {
-                // get first block
-                if let Some(begin) = next_interval.blocks.get_mut(0) {
-                    begin.update(&end_of_previos_interval_state);
-                }
-
-                next_interval.check_all_operations_downloaded();
-            }
-        }
-    }
-
-    /// Notify state requested_block_hash has been applied
-    ///
-    /// <BM> callback wchic return (bool as downloaded, bool as applied, bool as are_operations_complete)
-    pub fn block_applied(&mut self, requested_block_hash: &BlockHash) {
-        // find first interval with this block
-        let interval_to_handle = self.intervals.iter_mut().enumerate().find(|(_, interval)| {
-            // find first interval with this block
-            interval
-                .blocks
-                .iter()
-                .any(|b| b.block_hash.as_ref().eq(requested_block_hash))
+                .any(|b| b.as_ref().eq(requested_block_hash))
         });
 
         if let Some((interval_idx, interval)) = interval_to_handle {
-            // Note:end_interval
-            let mut end_of_interval: Option<(usize, InnerBlockState)> = None;
-
             // find block and update metadata
-            let block_count = interval.blocks.len();
             let mut block_index_to_remove_before = None;
-            for (block_index, mut b) in interval.blocks.iter_mut().enumerate() {
-                // update request block as downloaded
-                if requested_block_hash.eq(b.block_hash.as_ref()) {
-                    // now we can update
-                    if !b.applied {
-                        b.applied = true;
-                    }
-                    if b.applied {
-                        block_index_to_remove_before = Some(block_index);
-                    }
-
-                    // Note:end_interval: handle end of the interval
-                    if (block_count - 1) == block_index {
-                        end_of_interval = Some((
-                            interval_idx,
-                            InnerBlockState {
-                                block_downloaded: b.block_downloaded,
-                                operations_downloaded: b.operations_downloaded,
-                                applied: b.applied,
-                            },
-                        ));
-                    }
-
+            for (block_index, b) in interval.blocks.iter_mut().enumerate() {
+                // we want to remove all blocks before this applied blocks, we dont need them anymore
+                if requested_block_hash.eq(b.as_ref()) {
+                    block_index_to_remove_before = Some(block_index);
                     break;
                 }
             }
@@ -871,36 +864,31 @@ impl BranchState {
             if let Some(remove_index) = block_index_to_remove_before {
                 // we dont want to remove the block, just the blocks before, because at least first block must be applied
                 for _ in 0..remove_index {
-                    let _ = interval.blocks.remove(0);
-                }
-                interval.check_all_blocks_downloaded();
-            }
-
-            // Note:end_interval we need to copy this to beginging of the next interval
-            if let Some((interval_idx, end_of_previos_interval_state)) = end_of_interval {
-                if let Some(next_interval) = self.intervals.get_mut(interval_idx + 1) {
-                    // get first block
-                    if let Some(begin) = next_interval.blocks.get_mut(0) {
-                        begin.update(&end_of_previos_interval_state);
+                    if !interval.blocks.is_empty() {
+                        let _ = interval.blocks.remove(0);
                     }
                 }
             }
 
             // remove interval if it is empty
-            if let Some(interval_to_remove) = self.intervals.get_mut(interval_idx) {
-                if interval_to_remove.blocks.len() <= 1 {
-                    let all_applied = interval_to_remove.blocks.iter().all(|b| b.applied);
-                    if all_applied {
-                        let _ = self.intervals.remove(interval_idx);
+            if interval.blocks.len() <= 1 {
+                let all_applied = interval.blocks.iter().all(|b| {
+                    if let Some(block_state) = block_state_db.blocks.get(b) {
+                        block_state.applied
+                    } else {
+                        false
                     }
+                });
+                if all_applied {
+                    let _ = self.intervals.remove(interval_idx);
                 }
+            }
 
-                // here we need to remove all previous interval, becuse we dont need them, when higher block was applied
-                if interval_idx > 0 {
-                    // so, remove all previous
-                    for _ in 0..interval_idx {
-                        let _ = self.intervals.remove(0);
-                    }
+            // here we need to remove all previous interval, becuse we dont need them, when higher block was applied
+            if interval_idx > 0 {
+                // so, remove all previous
+                for _ in 0..interval_idx {
+                    let _ = self.intervals.remove(0);
                 }
             }
         };
@@ -924,11 +912,11 @@ struct BranchInterval {
     all_blocks_downloaded: bool,
     all_operations_downloaded: bool,
     all_block_applied: bool,
-    blocks: Vec<BlockStateRef>,
+    blocks: Vec<BlockRef>,
 }
 
 impl BranchInterval {
-    fn new(left: BlockState) -> Self {
+    fn new(left: BlockRef) -> Self {
         Self {
             all_blocks_downloaded: false,
             all_operations_downloaded: false,
@@ -937,20 +925,20 @@ impl BranchInterval {
         }
     }
 
-    fn new_with_left(left: BlockState, right_block_hash: Arc<BlockHash>) -> Self {
+    fn new_with_left(left: BlockRef, right_block_hash: BlockRef) -> Self {
         Self {
             all_blocks_downloaded: false,
             all_operations_downloaded: false,
             all_block_applied: false,
-            blocks: vec![left, BlockState::new(right_block_hash)],
+            blocks: vec![left, right_block_hash],
         }
     }
 
-    fn split(first_block_state: BlockState, blocks: Vec<Arc<BlockHash>>) -> Vec<BranchInterval> {
+    fn split(first_block: BlockRef, blocks: Vec<Arc<BlockHash>>) -> Vec<BranchInterval> {
         let mut intervals: Vec<BranchInterval> = Vec::with_capacity(blocks.len() / 2);
 
         // insert first interval
-        intervals.push(BranchInterval::new(first_block_state));
+        intervals.push(BranchInterval::new(first_block));
 
         // now split to interval the rest of the blocks
         for bh in blocks {
@@ -962,16 +950,16 @@ impl BranchInterval {
                             Some(BranchInterval::new_with_left(last_block.clone(), bh))
                         } else {
                             // this cannot happen
-                            last_part.blocks.push(BlockState::new(bh));
+                            last_part.blocks.push(bh);
                             None
                         }
                     } else {
                         // close interval
-                        last_part.blocks.push(BlockState::new(bh));
+                        last_part.blocks.push(bh);
                         None
                     }
                 }
-                None => Some(BranchInterval::new(BlockState::new(bh))),
+                None => Some(BranchInterval::new(bh)),
             };
 
             if let Some(new_interval) = new_interval {
@@ -987,6 +975,7 @@ impl BranchInterval {
         &mut self,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
+        block_state_db: &BlockStateDb,
     ) {
         let mut stop_block: Option<Arc<BlockHash>> = None;
         let mut start_from_the_begining = true;
@@ -994,76 +983,89 @@ impl BranchInterval {
             start_from_the_begining = false;
 
             let mut insert_predecessor: Option<(usize, Arc<BlockHash>)> = None;
-            let mut previous: Option<Arc<BlockHash>> = None;
+            let mut previous: Option<&Arc<BlockHash>> = None;
 
-            for (idx, b) in self.blocks.iter_mut().enumerate() {
+            for (idx, b) in self.blocks.iter().enumerate() {
                 // stop block optimization, because we are just prepending to blocks (optimization)
                 if let Some(stop_block) = stop_block.as_ref() {
-                    if stop_block.eq(&b.block_hash) {
+                    if stop_block.eq(&b) {
                         break;
                     }
                 }
 
-                if !b.block_downloaded {
-                    if ignored_blocks.contains(&b.block_hash) {
-                        // already scheduled
+                // check state for download
+                let block_state = match block_state_db.blocks.get(b) {
+                    Some(state) => {
+                        if !state.block_downloaded {
+                            if ignored_blocks.contains(b) {
+                                // already scheduled
+                                return;
+                            }
+                            if !blocks_to_download.contains(b) {
+                                // add for download
+                                blocks_to_download.push(b.clone());
+                            }
+                            return;
+                        } else {
+                            state
+                        }
+                    }
+                    None => {
+                        if ignored_blocks.contains(b) {
+                            // already scheduled
+                            return;
+                        }
+                        if !blocks_to_download.contains(b) {
+                            // add for download
+                            blocks_to_download.push(b.clone());
+                        }
                         return;
                     }
-                    if !blocks_to_download.contains(&b.block_hash) {
-                        // add for download
-                        blocks_to_download.push(b.block_hash.clone());
-                    }
-                    return;
-                }
+                };
 
                 // check if we missing predecessor in the interval (skipping check for the first block)
-                if let Some(previous_block) = previous.as_ref() {
-                    match b.predecessor_block_hash.as_ref() {
+                if let Some(previous_block) = previous {
+                    match block_state.predecessor_block_hash.as_ref() {
                         Some(block_predecessor) => {
                             if !previous_block.as_ref().eq(&block_predecessor) {
-                                // if previos block is not our predecessor, we need to insert it there
+                                // if previous block is not our predecessor, we need to insert it there
                                 insert_predecessor = Some((idx, block_predecessor.clone()));
-                                stop_block = Some(b.block_hash.clone());
+                                stop_block = Some(b.clone());
                                 break;
                             }
                         }
                         None => {
                             // strange, we dont know predecessor of block, so we schedule block downloading once more
-                            if ignored_blocks.contains(&b.block_hash) {
+                            if ignored_blocks.contains(b) {
                                 // already scheduled
                                 return;
                             }
-                            if !blocks_to_download.contains(&b.block_hash) {
+                            if !blocks_to_download.contains(b) {
                                 // add for download
-                                blocks_to_download.push(b.block_hash.clone());
+                                blocks_to_download.push(b.clone());
                             }
                             return;
                         }
                     }
                 }
 
-                previous = Some(b.block_hash.clone());
+                previous = Some(b);
             }
 
             // handle missing predecessor
             if let Some((predecessor_idx, predecessor_block_hash)) = insert_predecessor {
-                // create actual state for predecessor
-                let predecessor_state = BlockState::new(predecessor_block_hash);
-
                 // insert predecessor (we cannot insert predecessor before beginging of interval)
                 if predecessor_idx != 0 {
-                    self.blocks.insert(predecessor_idx, predecessor_state);
+                    self.blocks.insert(predecessor_idx, predecessor_block_hash);
+                    start_from_the_begining = true;
                 }
-                start_from_the_begining = true;
             }
         }
-
-        self.check_all_blocks_downloaded();
     }
 
     /// Check, if we had downloaded the whole interval,
     /// if flag ['all_blocks_downloaded'] was set, then returns true.
-    fn check_all_blocks_downloaded(&mut self) {
+    fn check_all_blocks_downloaded(&mut self, block_state_db: &BlockStateDb) {
         if self.all_blocks_downloaded {
             return;
         }
@@ -1073,12 +1075,16 @@ impl BranchInterval {
         let mut all_blocks_downloaded = true;
 
         for b in &self.blocks {
-            if !b.block_downloaded {
+            let block_state = match block_state_db.blocks.get(b) {
+                Some(state) => state,
+                None => return,
+            };
+            if !block_state.block_downloaded {
                 all_blocks_downloaded = false;
                 break;
             }
             if let Some(previous) = previous {
-                if let Some(block_predecessor) = &b.predecessor_block_hash {
+                if let Some(block_predecessor) = &block_state.predecessor_block_hash {
                     if !block_predecessor.eq(&previous) {
                         all_blocks_downloaded = false;
                         break;
@@ -1089,19 +1095,25 @@ impl BranchInterval {
                     break;
                 }
             }
-            previous = Some(&b.block_hash);
+            previous = Some(&b);
         }
 
         if all_blocks_downloaded {
             self.all_blocks_downloaded = true;
-            self.check_all_operations_downloaded();
+            self.check_all_operations_downloaded(block_state_db);
         }
     }
 
-    fn check_all_operations_downloaded(&mut self) {
+    fn check_all_operations_downloaded(&mut self, block_state_db: &BlockStateDb) {
         // check interval has all operations downloaded
         if self.all_blocks_downloaded {
-            self.all_operations_downloaded = self.blocks.iter().all(|b| b.operations_downloaded);
+            self.all_operations_downloaded = self.blocks.iter().all(|b| {
+                if let Some(state) = block_state_db.blocks.get(b) {
+                    state.operations_downloaded
+                } else {
+                    false
+                }
+            });
         }
     }
 
@@ -1110,21 +1122,29 @@ impl BranchInterval {
         requested_count: usize,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
+        block_state_db: &BlockStateDb,
     ) {
         if self.all_operations_downloaded {
             return;
         }
 
-        for b in self.blocks.iter_mut() {
-            // if downloaded, just skip
-            if b.operations_downloaded {
+        for b in self.blocks.iter() {
+            // skip already scheduled
+            if ignored_blocks.contains(b) || blocks_to_download.contains(b) {
                 continue;
             }
 
-            // skip already scheduled
-            if ignored_blocks.contains(&b.block_hash) || blocks_to_download.contains(&b.block_hash)
-            {
-                continue;
+            // check downloaded state
+            match block_state_db.blocks.get(b) {
+                Some(state) => {
+                    if state.operations_downloaded {
+                        continue;
+                    }
+                }
+                None => {
+                    // block is not downloaded already, so we need to wait, because we dont now validation_pass
+                    continue;
+                }
             }
 
             // check result
@@ -1133,7 +1153,7 @@ impl BranchInterval {
             }
 
             // schedule for download
-            blocks_to_download.push(b.block_hash.clone());
+            blocks_to_download.push(b.clone());
         }
     }
 }
@@ -1146,10 +1166,8 @@ pub struct InnerBlockState {
 }
 
 #[derive(Clone)]
-struct BlockState {
-    block_hash: Arc<BlockHash>,
+pub struct BlockState {
     predecessor_block_hash: Option<Arc<BlockHash>>,
-
     block_downloaded: bool,
     operations_downloaded: bool,
     applied: bool,
@@ -1157,9 +1175,8 @@ struct BlockState {
 }
 
 impl BlockState {
-    fn new(block_hash: Arc<BlockHash>) -> Self {
+    fn new() -> Self {
         BlockState {
-            block_hash,
             predecessor_block_hash: None,
             block_downloaded: false,
             operations_downloaded: false,
@@ -1168,9 +1185,8 @@ impl BlockState {
         }
     }
 
-    fn new_applied(block_hash: Arc<BlockHash>) -> Self {
+    fn new_applied() -> Self {
         BlockState {
-            block_hash,
             predecessor_block_hash: None,
             block_downloaded: true,
             operations_downloaded: true,
@@ -1224,7 +1240,15 @@ pub struct PeerBootstrapState {
 }
 
 pub struct BlockStateDb {
-    blocks: HashMap<Arc<BlockHash>, BlockStateRef>,
+    blocks: HashMap<BlockRef, BlockState>,
+}
+
+impl BlockStateDb {
+    pub fn insert_if_missing(&mut self, blocks: &[BlockRef], init_state: fn() -> BlockState) {
+        for b in blocks {
+            let _ = self.blocks.entry(b.clone()).or_insert_with(init_state);
+        }
+    }
 }
 
 impl BlockStateDb {
@@ -1242,8 +1266,8 @@ impl BlockStateDb {
     ) {
         let state = self
             .blocks
-            .entry(block_hash.clone())
-            .or_insert_with(|| BlockStateRef::new(block_hash));
+            .entry(block_hash)
+            .or_insert_with(BlockState::new);
         state.update(&new_state);
         state.update_predecessor(predecessor_block_hash);
     }
@@ -1500,7 +1524,7 @@ mod tests {
             .map(|i| &i.blocks)
             .flatten()
             .for_each(|b| {
-                if b.block_hash.as_ref().eq(last_applied.as_ref()) {
+                if b.as_ref().eq(last_applied.as_ref()) {
                     assert!(b.applied);
                     assert!(b.block_downloaded);
                     assert!(b.operations_downloaded);

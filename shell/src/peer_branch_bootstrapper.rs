@@ -149,13 +149,19 @@ pub struct PeerBranchBootstrapper {
 
 #[derive(Clone)]
 pub struct PeerBranchBootstrapperConfiguration {
+    max_bootstrap_interval_look_ahead_count: u8,
     max_bootstrap_branches_per_peer: usize,
     max_block_apply_batch: usize,
 }
 
 impl PeerBranchBootstrapperConfiguration {
-    pub fn new(max_bootstrap_branches_per_peer: usize, max_block_apply_batch: usize) -> Self {
+    pub fn new(
+        max_bootstrap_interval_look_ahead_count: u8,
+        max_bootstrap_branches_per_peer: usize,
+        max_block_apply_batch: usize,
+    ) -> Self {
         Self {
+            max_bootstrap_interval_look_ahead_count,
             max_bootstrap_branches_per_peer,
             max_block_apply_batch,
         }
@@ -219,10 +225,18 @@ impl PeerBranchBootstrapper {
         } = self;
 
         // schedule missing blocks for download
-        bootstrap_state.schedule_blocks_to_download(requester, log);
+        bootstrap_state.schedule_blocks_to_download(
+            requester,
+            cfg.max_bootstrap_interval_look_ahead_count,
+            log,
+        );
 
         // schedule missing operations for download
-        bootstrap_state.schedule_operations_to_download(requester, log);
+        bootstrap_state.schedule_operations_to_download(
+            requester,
+            cfg.max_bootstrap_interval_look_ahead_count,
+            log,
+        );
 
         // schedule missing operations for download
         bootstrap_state.schedule_blocks_for_apply(
