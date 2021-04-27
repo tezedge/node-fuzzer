@@ -17,7 +17,9 @@ use tezos_messages::p2p::encoding::block_header::Level;
 
 use crate::shell_channel::ShellChannelRef;
 use crate::state::bootstrap_state::{BootstrapState, InnerBlockState};
-use crate::state::data_requester::DataRequesterRef;
+use crate::state::data_requester::{
+    DataRequesterRef, RequestedBlockDataLock, RequestedOperationDataLock,
+};
 use crate::state::peer_state::DataQueues;
 use crate::subscription::subscribe_to_actor_terminated;
 
@@ -80,11 +82,16 @@ impl StartBranchBootstraping {
 #[derive(Clone, Debug)]
 pub struct UpdateOperationsState {
     block_hash: BlockHash,
+
+    data_lock: Option<Arc<RequestedOperationDataLock>>,
 }
 
 impl UpdateOperationsState {
-    pub fn new(block_hash: BlockHash) -> Self {
-        Self { block_hash }
+    pub fn new(block_hash: BlockHash, data_lock: Option<RequestedOperationDataLock>) -> Self {
+        Self {
+            block_hash,
+            data_lock: data_lock.map(Arc::new),
+        }
     }
 }
 
@@ -93,6 +100,8 @@ pub struct UpdateBlockState {
     block_hash: BlockHash,
     predecessor_block_hash: BlockHash,
     new_state: InnerBlockState,
+
+    data_lock: Option<Arc<RequestedBlockDataLock>>,
 }
 
 impl UpdateBlockState {
@@ -100,11 +109,13 @@ impl UpdateBlockState {
         block_hash: BlockHash,
         predecessor_block_hash: BlockHash,
         new_state: InnerBlockState,
+        data_lock: Option<RequestedBlockDataLock>,
     ) -> Self {
         Self {
             block_hash,
             predecessor_block_hash,
             new_state,
+            data_lock: data_lock.map(Arc::new),
         }
     }
 }
@@ -417,8 +428,9 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
             ),
         ) = self.bootstrap_state.blocks_stats();
         let (
-            processing_block_intervals,
+            processing_peer_branches,
             (
+                processing_block_intervals,
                 processing_block_intervals_downloaded,
                 processing_block_intervals_operations_downloaded,
             ),
@@ -426,6 +438,7 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
 
         info!(ctx.system.log(), "Peer branch bootstrapper processing info";
                    "peers_count" => self.bootstrap_state.peers_count(),
+                   "processing_peer_branches" => processing_peer_branches,
                    "processing_block_intervals" => processing_block_intervals,
                    "processing_block_intervals_downloaded" => processing_block_intervals_downloaded,
                    "processing_block_intervals_operations_downloaded" => processing_block_intervals_operations_downloaded,
@@ -452,12 +465,16 @@ impl Receive<UpdateBlockState> for PeerBranchBootstrapper {
             block_hash,
             predecessor_block_hash,
             new_state,
+            data_lock,
         } = msg;
         self.bootstrap_state
             .block_downloaded(block_hash, predecessor_block_hash, new_state);
 
         // process bootstrap
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log())
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
+
+        // explicit drop (not needed)
+        drop(data_lock);
     }
 }
 
@@ -475,7 +492,10 @@ impl Receive<UpdateOperationsState> for PeerBranchBootstrapper {
             .block_operations_downloaded(msg.block_hash);
 
         // process
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log())
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
+
+        // explicit drop (not needed)
+        drop(msg.data_lock);
     }
 }
 
@@ -489,7 +509,7 @@ impl Receive<ApplyBlockBatchDone> for PeerBranchBootstrapper {
         _: Option<BasicActorRef>,
     ) {
         // process message
-        self.bootstrap_state.block_applied(&msg.last_applied);
+        self.bootstrap_state.block_applied(msg.last_applied);
 
         // process
         self.process_bootstrap_pipelines(ctx, &ctx.system.log())

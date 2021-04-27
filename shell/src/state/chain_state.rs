@@ -30,7 +30,9 @@ use crate::peer_branch_bootstrapper::{
 };
 use crate::shell_channel::ShellChannelRef;
 use crate::state::bootstrap_state::InnerBlockState;
-use crate::state::data_requester::{DataRequester, DataRequesterRef};
+use crate::state::data_requester::{
+    DataRequester, DataRequesterRef, RequestedBlockDataLock, RequestedOperationDataLock,
+};
 use crate::state::head_state::CurrentHeadRef;
 use crate::state::peer_state::{DataQueuesLimits, PeerState};
 use crate::state::StateError;
@@ -491,6 +493,7 @@ impl BlockchainState {
         &mut self,
         received_block: &BlockHeaderWithHash,
         log: &Logger,
+        data_lock: Option<RequestedBlockDataLock>,
     ) -> Result<bool, StorageError> {
         // store block
         let is_new_block = self.block_storage.put_block_header(received_block)?;
@@ -514,6 +517,7 @@ impl BlockchainState {
                         applied: block_metadata.is_applied(),
                         operations_downloaded: are_operations_complete,
                     },
+                    data_lock,
                 ),
                 None,
             );
@@ -593,13 +597,14 @@ impl BlockchainState {
     /// Returns true, if new block is successfully downloaded by this call
     pub fn process_block_operations_from_peer(
         &mut self,
-        block_hash: &BlockHash,
+        block_hash: BlockHash,
         message: &OperationsForBlocksMessage,
+        data_lock: Option<RequestedOperationDataLock>,
     ) -> Result<bool, StateError> {
         // TODO: TE-369 - optimize double check
         // we need to differ this flag
         let (are_operations_complete, was_block_finished_now) =
-            if self.operations_meta_storage.is_complete(block_hash)? {
+            if self.operations_meta_storage.is_complete(&block_hash)? {
                 (true, false)
             } else {
                 // update operations metadata for block
@@ -610,7 +615,8 @@ impl BlockchainState {
         if are_operations_complete {
             // ping branch bootstrapper with received operations
             if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper.as_ref() {
-                peer_branch_bootstrapper.tell(UpdateOperationsState::new(block_hash.clone()), None);
+                peer_branch_bootstrapper
+                    .tell(UpdateOperationsState::new(block_hash, data_lock), None);
             }
         }
 
