@@ -168,6 +168,9 @@ struct Stats {
     unseen_block_last: Instant,
     /// Last time when previously unseen operations were received
     unseen_block_operations_last: Instant,
+
+    /// Count of received messages from the last log
+    actor_received_messages_count: usize,
 }
 
 impl Stats {
@@ -176,6 +179,9 @@ impl Stats {
     }
     fn get_and_clear_unseen_block_operations_count(&mut self) -> usize {
         std::mem::replace(&mut self.unseen_block_operations_count, 0)
+    }
+    fn get_and_clear_actor_received_messages_count(&mut self) -> usize {
+        std::mem::replace(&mut self.actor_received_messages_count, 0)
     }
 }
 
@@ -1363,6 +1369,7 @@ impl
                 unseen_block_last: Instant::now(),
                 unseen_block_operations_count: 0,
                 unseen_block_operations_last: Instant::now(),
+                actor_received_messages_count: 0,
             },
             is_sandbox,
             identity_peer_id,
@@ -1436,11 +1443,13 @@ impl Actor for ChainManager {
         sender: Option<BasicActorRef>,
     ) {
         if let SystemMsg::Event(evt) = msg {
+            self.stats.actor_received_messages_count += 1;
             self.receive(ctx, evt, sender);
         }
     }
 
     fn recv(&mut self, ctx: &Context<Self::Msg>, msg: Self::Msg, sender: Sender) {
+        self.stats.actor_received_messages_count += 1;
         self.receive(ctx, msg, sender);
     }
 }
@@ -1496,11 +1505,12 @@ impl Receive<LogStats> for ChainManager {
             "remote" => remote,
             "remote_level" => remote_level,
             "remote_fitness" => remote_fitness);
-        info!(log, "Blocks and operations info";
+        info!(log, "Blocks, operations, messages info";
             "last_received_block_headers_count" => self.stats.get_and_clear_unseen_block_headers_count(),
             "last_received_block_operations_count" => self.stats.get_and_clear_unseen_block_operations_count(),
             "last_block_secs" => self.stats.unseen_block_last.elapsed().as_secs(),
             "last_block_operations_secs" => self.stats.unseen_block_operations_last.elapsed().as_secs(),
+            "actor_received_messages_count" => self.stats.get_and_clear_actor_received_messages_count(),
             "peer_count" => self.peers.len());
         // TODO: TE-369 - peers stats
         for peer in self.peers.values() {

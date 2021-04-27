@@ -155,6 +155,9 @@ pub struct PeerBranchBootstrapper {
 
     bootstrap_state: BootstrapState,
 
+    /// Count of received messages from the last log
+    actor_received_messages_count: usize,
+
     cfg: PeerBranchBootstrapperConfiguration,
 }
 
@@ -196,14 +199,6 @@ impl PeerBranchBootstrapper {
         )
     }
 
-    /// We can receive parallely diferent event, and after each event we dont need to schedule this one, becuase it is unnecesseray:
-    ///
-    /// e1 (schedule pbpb1), e2 (schedule pbpb2), e3 (schedule pbpb3), pbpb1, pbpb2, pbpb3, e4 (schedule pbpb4), pbpb4
-    ///
-    /// we want it like this:
-    ///
-    /// e1 (schedule pbpb1), e2 (schedule pbpb2 - not needed), e3 (schedule pbpb3 - not needed), pbpb1, e4 (schedule pbpb4), pbpb4
-    ///
     fn schedule_process_bootstrap_pipelines(
         &mut self,
         ctx: &Context<PeerBranchBootstrapperMsg>,
@@ -215,6 +210,10 @@ impl PeerBranchBootstrapper {
             None,
             PingBootstrapPipelinesProcessing,
         );
+    }
+
+    fn get_and_clear_actor_received_messages_count(&mut self) -> usize {
+        std::mem::replace(&mut self.actor_received_messages_count, 0)
     }
 
     fn clean_peer_data(&mut self, actor: &ActorUri) {
@@ -283,6 +282,7 @@ impl
             requester,
             shell_channel,
             bootstrap_state: Default::default(),
+            actor_received_messages_count: 0,
             cfg,
         }
     }
@@ -320,6 +320,7 @@ impl Actor for PeerBranchBootstrapper {
     }
 
     fn recv(&mut self, ctx: &Context<Self::Msg>, msg: Self::Msg, sender: Sender) {
+        self.actor_received_messages_count += 1;
         self.receive(ctx, msg, sender);
     }
 
@@ -330,6 +331,7 @@ impl Actor for PeerBranchBootstrapper {
         sender: Option<BasicActorRef>,
     ) {
         if let SystemMsg::Event(evt) = msg {
+            self.actor_received_messages_count += 1;
             self.receive(ctx, evt, sender);
         }
     }
@@ -438,6 +440,7 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
 
         info!(ctx.system.log(), "Peer branch bootstrapper processing info";
                    "peers_count" => self.bootstrap_state.peers_count(),
+                   "actor_received_messages_count" => self.get_and_clear_actor_received_messages_count(),
                    "processing_peer_branches" => processing_peer_branches,
                    "processing_block_intervals" => processing_block_intervals,
                    "processing_block_intervals_downloaded" => processing_block_intervals_downloaded,
