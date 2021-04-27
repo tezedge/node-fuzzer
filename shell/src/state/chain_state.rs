@@ -45,7 +45,7 @@ pub(crate) mod bootstrap_constants {
     use crate::state::peer_state::DataQueuesLimits;
 
     /// We can controll speedup of downloading blocks from network
-    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT: u8 = 3;
+    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT: u8 = 10;
 
     /// We can validate just few branches/head from one peer, so we limit it by this constant
     pub(crate) const MAX_BOOTSTRAP_BRANCHES_PER_PEER: usize = 2;
@@ -55,7 +55,7 @@ pub(crate) mod bootstrap_constants {
 
     /// Constants for peer's queue
     pub(crate) const LIMITS: DataQueuesLimits = DataQueuesLimits {
-        max_queued_block_headers_count: 10,
+        max_queued_block_headers_count: 15,
         max_queued_block_operations_count: 15,
     };
 }
