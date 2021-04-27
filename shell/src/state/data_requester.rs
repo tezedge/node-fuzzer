@@ -449,8 +449,9 @@ impl DataRequester {
 /// but make sure that it was handled, and nobody will put the same data to queue, while we are handling them
 ///
 /// When this lock goes out of the scope, then queues will be clear for block_hash
+#[derive(Debug)]
 pub struct RequestedBlockDataLock {
-    block_hash: Arc<BlockHash>,
+    pub block_hash: Arc<BlockHash>,
     queued_block_headers: Arc<Mutex<HashSet<Arc<BlockHash>>>>,
 }
 
@@ -466,6 +467,7 @@ impl Drop for RequestedBlockDataLock {
 /// but make sure that it was handled, and nobody will put the same data to queue, while we are handling them
 ///
 /// When this lock goes out of the scope, then queues will be clear for block_hash
+#[derive(Debug)]
 pub struct RequestedOperationDataLock {
     validation_pass: i8,
     block_hash: Arc<BlockHash>,

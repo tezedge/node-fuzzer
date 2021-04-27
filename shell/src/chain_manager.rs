@@ -48,6 +48,7 @@ use crate::shell_channel::{
     ShellChannelTopic,
 };
 use crate::state::chain_state::{BlockAcceptanceResult, BlockchainState};
+use crate::state::data_requester::RequestedBlockDataLock;
 use crate::state::head_state::CurrentHeadRef;
 use crate::state::peer_state::{tell_peer, PeerState};
 use crate::state::synchronization_state::{
@@ -432,10 +433,8 @@ impl ChainManager {
                                         chain_state,
                                         shell_channel,
                                         &log,
+                                        Some(requested_data),
                                     )?;
-
-                                    // explicit drop (not needed)
-                                    drop(requested_data);
                                 }
                             }
                             PeerMessage::GetBlockHeaders(message) => {
@@ -487,8 +486,9 @@ impl ChainManager {
                                     // update operations state
                                     let block_hash = operations.operations_for_block().hash();
                                     if chain_state.process_block_operations_from_peer(
-                                        &block_hash,
-                                        &operations,
+                                        block_hash.clone(),
+                                        operations,
+                                        Some(requested_data),
                                     )? {
                                         stats.unseen_block_operations_count += 1;
 
@@ -502,7 +502,6 @@ impl ChainManager {
                                         shell_channel.tell(
                                             Publish {
                                                 msg: AllBlockOperationsReceived {
-                                                    hash: block_hash.clone(),
                                                     level: block_meta.level(),
                                                 }
                                                 .into(),
@@ -511,9 +510,6 @@ impl ChainManager {
                                             None,
                                         );
                                     }
-
-                                    // explicit drop (not needed)
-                                    drop(requested_data)
                                 }
                             }
                             PeerMessage::GetOperationsForBlocks(message) => {
@@ -567,6 +563,7 @@ impl ChainManager {
                                                 chain_state,
                                                 shell_channel,
                                                 &log,
+                                                None,
                                             )?;
 
                                             // here we accept head, which also means that we know predecessor
@@ -863,9 +860,10 @@ impl ChainManager {
         chain_state: &mut BlockchainState,
         shell_channel: &ShellChannelRef,
         log: &Logger,
+        data_lock: Option<RequestedBlockDataLock>,
     ) -> Result<(), Error> {
         // store header
-        if chain_state.process_block_header_from_peer(&received_block, log)? {
+        if chain_state.process_block_header_from_peer(&received_block, log, data_lock)? {
             // update stats for new header
             stats.unseen_block_last = Instant::now();
             stats.unseen_block_count += 1;
@@ -1039,7 +1037,6 @@ impl ChainManager {
                                 self.shell_channel.tell(
                                     Publish {
                                         msg: AllBlockOperationsReceived {
-                                            hash: block_header_with_hash.hash.clone(),
                                             level: block_metadata.level(),
                                         }
                                         .into(),

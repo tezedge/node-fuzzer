@@ -130,15 +130,16 @@ impl BootstrapState {
         )
     }
 
-    pub fn block_intervals_stats(&self) -> (usize, (usize, usize)) {
+    pub fn block_intervals_stats(&self) -> (usize, (usize, usize, usize)) {
         self.peers
             .iter()
-            .fold((0, (0, 0)), |stats_acc, (_, peer_state)| {
+            .fold((0, (0, 0, 0)), |stats_acc, (_, peer_state)| {
                 peer_state.branches.iter().fold(
                     stats_acc,
                     |(
-                        mut intervals_count,
+                        branches_count,
                         (
+                            mut intervals_count,
                             mut intervals_blocks_downloaded,
                             mut intervals_block_operations_downloaded,
                         ),
@@ -154,8 +155,9 @@ impl BootstrapState {
                             }
                         }
                         (
-                            intervals_count,
+                            branches_count + 1,
                             (
+                                intervals_count,
                                 intervals_blocks_downloaded,
                                 intervals_block_operations_downloaded,
                             ),
@@ -423,21 +425,21 @@ impl BootstrapState {
         });
     }
 
-    pub fn block_applied(&mut self, block_hash: &BlockHash) {
+    pub fn block_applied(&mut self, block_hash: Arc<BlockHash>) {
         let BootstrapState {
             peers,
             block_state_db,
         } = self;
 
         // update db
-        block_state_db.mark_block_applied(&block_hash);
+        block_state_db.mark_block_applied(block_hash.clone());
 
         // update pipelines - this trimes branch intervals
         peers.values_mut().for_each(|peer_state| {
             peer_state
                 .branches
                 .iter_mut()
-                .for_each(|branch| branch.block_applied(block_hash, block_state_db));
+                .for_each(|branch| branch.block_applied(&block_hash, block_state_db));
         });
     }
 
@@ -746,11 +748,11 @@ impl BranchState {
     /// <BM> callback which return (bool as downloaded, bool as applied, bool as are_operations_complete)
     pub fn block_downloaded(
         &mut self,
-        requested_block_hash: &BlockHash,
+        requested_block_hash: &BlockRef,
         block_state_db: &BlockStateDb,
     ) {
         // find first interval with this block
-        let interval_to_handle = self.intervals.iter_mut().find(|interval| {
+        let interval_to_handle = self.intervals.iter_mut().enumerate().find(|(_, interval)| {
             // find first interval with this block
             interval
                 .blocks
@@ -758,14 +760,14 @@ impl BranchState {
                 .any(|b| b.as_ref().eq(requested_block_hash))
         });
 
-        if let Some(interval) = interval_to_handle {
+        if let Some((interval_idx, interval)) = interval_to_handle {
             let mut predecessor_insert_to_index: Option<(usize, BlockRef)> = None;
 
             // trying to insert predecessor before downloaded block, if not already
             let mut previous: Option<&BlockRef> = None;
             for (block_index, b) in interval.blocks.iter().enumerate() {
                 // find block
-                if requested_block_hash.eq(b.as_ref()) {
+                if requested_block_hash.eq(b) {
                     let block_state = match block_state_db.blocks.get(b) {
                         Some(state) => state,
                         None => return,
@@ -811,7 +813,19 @@ impl BranchState {
 
             // check if have downloaded whole interval
             interval.check_all_blocks_downloaded(block_state_db);
+
+            // check next interval, in case we handle here end of previous interval
+            if let Some(next_interval) = self.intervals.get_mut(interval_idx + 1) {
+                next_interval.check_all_blocks_downloaded(block_state_db);
+            }
         }
+
+        // check, what if requested block is already applied (this removes all predecessor and/or the whole interval)
+        if let Some(state) = block_state_db.blocks.get(requested_block_hash) {
+            if state.applied {
+                self.block_applied(&requested_block_hash, block_state_db);
+            }
+        };
     }
 
     /// Notify state requested_block_hash has all downloaded operations.
@@ -853,7 +867,7 @@ impl BranchState {
         if let Some((interval_idx, interval)) = interval_to_handle {
             // find block and update metadata
             let mut block_index_to_remove_before = None;
-            for (block_index, b) in interval.blocks.iter_mut().enumerate() {
+            for (block_index, b) in interval.blocks.iter().enumerate() {
                 // we want to remove all blocks before this applied blocks, we dont need them anymore
                 if requested_block_hash.eq(b.as_ref()) {
                     block_index_to_remove_before = Some(block_index);
@@ -868,6 +882,7 @@ impl BranchState {
                         let _ = interval.blocks.remove(0);
                     }
                 }
+                interval.check_all_blocks_downloaded(&block_state_db);
             }
 
             // remove interval if it is empty
@@ -1165,7 +1180,7 @@ pub struct InnerBlockState {
     pub applied: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BlockState {
     predecessor_block_hash: Option<Arc<BlockHash>>,
     block_downloaded: bool,
@@ -1293,14 +1308,15 @@ impl BlockStateDb {
         }
     }
 
-    pub fn mark_block_applied(&mut self, block_hash: &BlockHash) {
+    pub fn mark_block_applied(&mut self, block_hash: Arc<BlockHash>) {
+        let block_state = self
+            .blocks
+            .entry(block_hash)
+            .or_insert_with(|| BlockState::new_applied());
+        block_state.applied = true;
+        block_state.scheduled_for_apply = false;
+
         // TODO: all predecessor mark as applied and remove from memory?
-        // mark batch start
-        // let mut block_state = None;
-        if let Some(block_state) = self.blocks.get_mut(block_hash) {
-            block_state.applied = true;
-            block_state.scheduled_for_apply = false;
-        }
     }
 }
 
@@ -1495,6 +1511,10 @@ mod tests {
             block(20),
         ];
 
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         // create
         let pipeline = BranchState::new(last_applied.clone(), history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
@@ -1524,14 +1544,15 @@ mod tests {
             .map(|i| &i.blocks)
             .flatten()
             .for_each(|b| {
+                let block_state = block_state_db.blocks.get(b).unwrap();
                 if b.as_ref().eq(last_applied.as_ref()) {
-                    assert!(b.applied);
-                    assert!(b.block_downloaded);
-                    assert!(b.operations_downloaded);
+                    assert!(block_state.applied);
+                    assert!(block_state.block_downloaded);
+                    assert!(block_state.operations_downloaded);
                 } else {
-                    assert!(!b.applied);
-                    assert!(!b.block_downloaded);
-                    assert!(!b.operations_downloaded);
+                    assert!(!block_state.applied);
+                    assert!(!block_state.block_downloaded);
+                    assert!(!block_state.operations_downloaded);
                 }
             })
     }
@@ -1658,6 +1679,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -1672,38 +1697,52 @@ mod tests {
         assert!(!pipeline.intervals[0].all_blocks_downloaded);
         assert_eq!(pipeline.intervals[0].blocks.len(), 2);
         let mut result = Vec::new();
-        pipeline.collect_next_blocks_to_download(1, &HashSet::default(), &mut result);
+        pipeline.collect_next_blocks_to_download(
+            1,
+            1,
+            &HashSet::default(),
+            &mut result,
+            &block_state_db,
+        );
         assert_eq!(1, result.len());
         assert_eq!(result[0].as_ref(), block(2).as_ref());
 
-        pipeline.block_downloaded(
-            &block(2),
-            &InnerBlockState {
+        block_state_db.update_block(
+            block(2),
+            block(1),
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: false,
             },
-            block(1),
         );
+        pipeline.block_downloaded(&block(2), &block_state_db);
         // interval not closed
         assert!(!pipeline.intervals[0].all_blocks_downloaded);
         assert_eq!(pipeline.intervals[0].blocks.len(), 3);
 
         let mut result = Vec::new();
-        pipeline.collect_next_blocks_to_download(1, &HashSet::default(), &mut result);
+        pipeline.collect_next_blocks_to_download(
+            1,
+            1,
+            &HashSet::default(),
+            &mut result,
+            &block_state_db,
+        );
         assert_eq!(1, result.len());
         assert_eq!(result[0].as_ref(), block(1).as_ref());
 
         // register downloaded block 1
-        pipeline.block_downloaded(
-            &block(1),
-            &InnerBlockState {
+        block_state_db.update_block(
+            block(1),
+            block(0),
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: false,
             },
-            block(0),
         );
+        pipeline.block_downloaded(&block(1), &block_state_db);
         // interval is closed
         assert!(pipeline.intervals[0].all_blocks_downloaded);
         assert_eq!(pipeline.intervals[0].blocks.len(), 3);
@@ -1713,56 +1752,53 @@ mod tests {
         assert_eq!(pipeline.intervals[1].blocks.len(), 2);
 
         let mut result = Vec::new();
-        pipeline.collect_next_blocks_to_download(1, &HashSet::default(), &mut result);
-        assert_eq!(1, result.len());
+        pipeline.collect_next_blocks_to_download(
+            3,
+            2,
+            &HashSet::default(),
+            &mut result,
+            &block_state_db,
+        );
+        assert_eq!(2, result.len());
         assert_eq!(result[0].as_ref(), block(5).as_ref());
+        assert_eq!(result[1].as_ref(), block(8).as_ref());
 
         // register downloaded block 5 with his predecessor 4
-        pipeline.block_downloaded(
-            &block(5),
-            &InnerBlockState {
+        block_state_db.update_block(
+            block(5),
+            block(4),
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: false,
             },
-            block(4),
         );
+        pipeline.block_downloaded(&block(5), &block_state_db);
         assert!(!pipeline.intervals[1].all_blocks_downloaded);
         assert_eq!(pipeline.intervals[1].blocks.len(), 3);
 
         // register downloaded block 4 as applied
-        pipeline.block_downloaded(
-            &block(4),
-            &InnerBlockState {
+        block_state_db.update_block(
+            block(4),
+            block(3),
+            InnerBlockState {
                 block_downloaded: true,
                 applied: true,
                 operations_downloaded: false,
             },
-            block(3),
         );
+        pipeline.block_downloaded(&block(4), &block_state_db);
 
         // first interval with block 2 and block 3 were removed, because if 4 is applied, 2/3 must be also
         assert!(pipeline.intervals[0].all_blocks_downloaded);
         assert_eq!(pipeline.intervals[0].blocks.len(), 2);
-        assert_eq!(
-            pipeline.intervals[0].blocks[0].block_hash.as_ref(),
-            block(4).as_ref()
-        );
-        assert_eq!(
-            pipeline.intervals[0].blocks[1].block_hash.as_ref(),
-            block(5).as_ref()
-        );
+        assert_eq!(pipeline.intervals[0].blocks[0].as_ref(), block(4).as_ref());
+        assert_eq!(pipeline.intervals[0].blocks[1].as_ref(), block(5).as_ref());
 
         assert!(!pipeline.intervals[1].all_blocks_downloaded);
         assert_eq!(pipeline.intervals[1].blocks.len(), 2);
-        assert_eq!(
-            pipeline.intervals[1].blocks[0].block_hash.as_ref(),
-            block(5).as_ref()
-        );
-        assert_eq!(
-            pipeline.intervals[1].blocks[1].block_hash.as_ref(),
-            block(8).as_ref()
-        );
+        assert_eq!(pipeline.intervals[1].blocks[0].as_ref(), block(5).as_ref());
+        assert_eq!(pipeline.intervals[1].blocks[1].as_ref(), block(8).as_ref());
 
         Ok(())
     }
@@ -1783,6 +1819,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -1797,27 +1837,64 @@ mod tests {
         assert_eq!(pipeline.intervals.len(), 7);
 
         // check first block (block(2) ) from next 1 interval
-        assert!(!pipeline.intervals[1].blocks[0].applied);
-        assert!(!pipeline.intervals[1].blocks[0].block_downloaded);
-        assert!(!pipeline.intervals[1].blocks[0].operations_downloaded);
+        assert!(
+            !block_state_db
+                .blocks
+                .get(&pipeline.intervals[1].blocks[0])
+                .unwrap()
+                .applied
+        );
+        assert!(
+            !block_state_db
+                .blocks
+                .get(&pipeline.intervals[1].blocks[0])
+                .unwrap()
+                .block_downloaded
+        );
+        assert!(
+            !block_state_db
+                .blocks
+                .get(&pipeline.intervals[1].blocks[0])
+                .unwrap()
+                .operations_downloaded
+        );
 
         // register downloaded block 2 which is applied
-        pipeline.block_downloaded(
-            &block(2),
-            &InnerBlockState {
+        block_state_db.update_block(
+            block(2),
+            block(1),
+            InnerBlockState {
                 block_downloaded: true,
                 applied: true,
                 operations_downloaded: false,
             },
-            block(1),
         );
+        pipeline.block_downloaded(&block(2), &block_state_db);
         // interval 0 was removed
         assert_eq!(pipeline.intervals.len(), 6);
         // and first block of next interval is marked the same as the last block from 0 inerval, becauase it is the same block (block(2))
         // check first block (block(2) ) from next 1 interval
-        assert!(pipeline.intervals[0].blocks[0].applied);
-        assert!(pipeline.intervals[0].blocks[0].block_downloaded);
-        assert!(!pipeline.intervals[0].blocks[0].operations_downloaded);
+        assert!(
+            block_state_db
+                .blocks
+                .get(&pipeline.intervals[0].blocks[0])
+                .unwrap()
+                .applied
+        );
+        assert!(
+            block_state_db
+                .blocks
+                .get(&pipeline.intervals[0].blocks[0])
+                .unwrap()
+                .block_downloaded
+        );
+        assert!(
+            !block_state_db
+                .blocks
+                .get(&pipeline.intervals[0].blocks[0])
+                .unwrap()
+                .operations_downloaded
+        );
     }
 
     #[test]
@@ -1836,6 +1913,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -1850,51 +1931,53 @@ mod tests {
         assert_eq!(pipeline.intervals.len(), 7);
 
         // trigger that block 2 is download with predecessor 1
-        pipeline.block_downloaded(
-            &block(2),
-            &InnerBlockState {
+        block_state_db.update_block(
+            block(2),
+            block(1),
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: false,
             },
-            block(1),
         );
+        pipeline.block_downloaded(&block(2), &block_state_db);
         // mark 1 as applied (half of interval)
-        pipeline.block_applied(&block(1));
+        block_state_db.mark_block_applied(block(1));
+        pipeline.block_applied(&block(1), &block_state_db);
         assert_eq!(pipeline.intervals.len(), 7);
         // begining of interval is changed to block1
         assert_eq!(pipeline.intervals[0].blocks.len(), 2);
-        assert_eq!(
-            pipeline.intervals[0].blocks[0].block_hash.as_ref(),
-            block(1).as_ref()
-        );
-        assert_eq!(
-            pipeline.intervals[0].blocks[1].block_hash.as_ref(),
-            block(2).as_ref()
-        );
+        assert_eq!(pipeline.intervals[0].blocks[0].as_ref(), block(1).as_ref());
+        assert_eq!(pipeline.intervals[0].blocks[1].as_ref(), block(2).as_ref());
 
         // trigger that block 2 is applied
-        pipeline.block_applied(&block(2));
+
+        println!("BEFORE - {:?}", pipeline.intervals[0].blocks);
+        block_state_db.mark_block_applied(block(2));
+        pipeline.block_applied(&block(2), &block_state_db);
+        println!("AFTER - {:?}", pipeline.intervals[0].blocks);
         assert_eq!(pipeline.intervals.len(), 6);
 
         // trigger that block 8 is applied
-        pipeline.block_applied(&block(8));
+        block_state_db.mark_block_applied(block(8));
+        pipeline.block_applied(&block(8), &block_state_db);
         for (id, i) in pipeline.intervals.iter().enumerate() {
             println!(
                 "{} : {:?}",
                 id,
                 i.blocks
                     .iter()
-                    .map(|b| b.block_hash.as_ref().clone())
+                    .map(|b| b.as_ref().clone())
                     .collect::<Vec<_>>()
             );
         }
         assert_eq!(pipeline.intervals.len(), 4);
 
         // trigger that last block is applied
-        pipeline.block_applied(&block(20));
+        block_state_db.mark_block_applied(block(20));
+        pipeline.block_applied(&block(20), &block_state_db);
 
-        println!("inevals: {}", pipeline.intervals.len());
+        println!("intervals: {}", pipeline.intervals.len());
 
         // interval 0 was removed
         assert!(pipeline.is_done());
@@ -1916,6 +1999,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -1932,7 +2019,13 @@ mod tests {
 
         // try to get blocks for download - max 5
         let mut blocks_to_download = Vec::new();
-        pipeline.collect_next_blocks_to_download(5, &HashSet::default(), &mut blocks_to_download);
+        pipeline.collect_next_blocks_to_download(
+            5,
+            7,
+            &HashSet::default(),
+            &mut blocks_to_download,
+            &block_state_db,
+        );
         assert_eq!(5, blocks_to_download.len());
         assert_eq!(blocks_to_download[0].as_ref(), block(2).as_ref());
         assert_eq!(blocks_to_download[1].as_ref(), block(5).as_ref());
@@ -1942,14 +2035,26 @@ mod tests {
 
         // try to get blocks for download - max 2
         let mut blocks_to_download = Vec::new();
-        pipeline.collect_next_blocks_to_download(2, &HashSet::default(), &mut blocks_to_download);
+        pipeline.collect_next_blocks_to_download(
+            2,
+            7,
+            &HashSet::default(),
+            &mut blocks_to_download,
+            &block_state_db,
+        );
         assert_eq!(2, blocks_to_download.len());
         assert_eq!(blocks_to_download[0].as_ref(), block(2).as_ref());
         assert_eq!(blocks_to_download[1].as_ref(), block(5).as_ref());
 
         // try to get blocks for download - max 2 interval with ignored
         let mut blocks_to_download = Vec::new();
-        pipeline.collect_next_blocks_to_download(2, &hash_set![block(5)], &mut blocks_to_download);
+        pipeline.collect_next_blocks_to_download(
+            2,
+            7,
+            &hash_set![block(5)],
+            &mut blocks_to_download,
+            &block_state_db,
+        );
         assert_eq!(2, blocks_to_download.len());
         assert_eq!(blocks_to_download[0].as_ref(), block(2).as_ref());
         assert_eq!(blocks_to_download[1].as_ref(), block(8).as_ref());
@@ -1971,6 +2076,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -1985,26 +2094,28 @@ mod tests {
         assert!(!pipeline.intervals[0].all_operations_downloaded);
 
         // download block 2 (but operations still misssing)
-        pipeline.block_downloaded(
-            &block(2),
-            &InnerBlockState {
+        block_state_db.update_block(
+            block(2),
+            block(1),
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: false,
             },
-            block(1),
         );
+        pipeline.block_downloaded(&block(2), &block_state_db);
 
-        // get next for download (meanwhile operations for 2 was downloaded)
+        // get next for download from first interval
         let mut missing_blocks = Vec::new();
         pipeline.intervals[0].collect_block_with_missing_operations(
             2,
             &HashSet::default(),
             &mut missing_blocks,
+            &block_state_db,
         );
-        assert_eq!(2, missing_blocks.len());
-        assert_eq!(missing_blocks[0], block(1));
-        assert_eq!(missing_blocks[1], block(2));
+
+        assert_eq!(1, missing_blocks.len());
+        assert_eq!(missing_blocks[0], block(2));
         assert!(!pipeline.intervals[0].all_operations_downloaded);
 
         // get next for download with ignored blocks
@@ -2013,6 +2124,7 @@ mod tests {
             2,
             &hash_set![block(2)],
             &mut missing_blocks,
+            &block_state_db,
         );
         assert_eq!(1, missing_blocks.len());
         assert_eq!(missing_blocks[0], block(5));
@@ -2024,6 +2136,7 @@ mod tests {
             2,
             &hash_set![block(1)],
             &mut missing_blocks,
+            &block_state_db,
         );
         assert_eq!(2, missing_blocks.len());
         assert_eq!(missing_blocks[0], block(5));
@@ -2049,6 +2162,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -2065,13 +2182,25 @@ mod tests {
 
         // try to get blocks for download - max 1 interval
         let mut result = Vec::new();
-        pipeline.collect_next_block_operations_to_download(1, &HashSet::default(), &mut result);
+        pipeline.collect_next_block_operations_to_download(
+            1,
+            5,
+            &HashSet::default(),
+            &mut result,
+            &block_state_db,
+        );
         assert_eq!(1, result.len());
         assert_eq!(result[0].as_ref(), block(2).as_ref());
 
         // try to get blocks for download - max 4
         let mut result = Vec::new();
-        pipeline.collect_next_block_operations_to_download(4, &HashSet::default(), &mut result);
+        pipeline.collect_next_block_operations_to_download(
+            4,
+            7,
+            &HashSet::default(),
+            &mut result,
+            &block_state_db,
+        );
         assert_eq!(4, result.len());
         assert_eq!(result[0].as_ref(), block(2).as_ref());
         assert_eq!(result[1].as_ref(), block(5).as_ref());
@@ -2082,8 +2211,10 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_block_operations_to_download(
             4,
+            7,
             &hash_set![block(5), block(10)],
             &mut result,
+            &block_state_db,
         );
         assert_eq!(4, result.len());
         assert_eq!(result[0].as_ref(), block(2).as_ref());
@@ -2108,6 +2239,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -2119,78 +2254,93 @@ mod tests {
         assert_interval(&pipeline.intervals[6], (block(15), block(20)));
 
         // download blocks and operations from 0 to 8
-        pipeline.block_downloaded(
-            &block(8),
-            &InnerBlockState {
-                block_downloaded: true,
-                applied: false,
-                operations_downloaded: true,
-            },
+        block_state_db.update_block(
+            block(8),
             block(7),
-        );
-        pipeline.block_downloaded(
-            &block(7),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(8), &block_state_db);
+
+        block_state_db.update_block(
+            block(7),
             block(6),
-        );
-        pipeline.block_downloaded(
-            &block(6),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(7), &block_state_db);
+
+        block_state_db.update_block(
+            block(6),
             block(5),
-        );
-        pipeline.block_downloaded(
-            &block(5),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(6), &block_state_db);
+
+        block_state_db.update_block(
+            block(5),
             block(4),
-        );
-        pipeline.block_downloaded(
-            &block(4),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(5), &block_state_db);
+
+        block_state_db.update_block(
+            block(4),
             block(3),
-        );
-        pipeline.block_downloaded(
-            &block(3),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(4), &block_state_db);
+
+        block_state_db.update_block(
+            block(3),
             block(2),
-        );
-        pipeline.block_downloaded(
-            &block(2),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(3), &block_state_db);
+
+        block_state_db.update_block(
+            block(2),
             block(1),
-        );
-        pipeline.block_downloaded(
-            &block(1),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
-            block(0),
         );
+        pipeline.block_downloaded(&block(2), &block_state_db);
+
+        block_state_db.update_block(
+            block(1),
+            block(0),
+            InnerBlockState {
+                block_downloaded: true,
+                applied: false,
+                operations_downloaded: true,
+            },
+        );
+        pipeline.block_downloaded(&block(1), &block_state_db);
 
         // check all downloaded inervals
         assert!(pipeline.intervals[0].all_blocks_downloaded);
@@ -2215,6 +2365,10 @@ mod tests {
         ];
 
         // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
         let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
         assert_eq!(pipeline.intervals.len(), 7);
         assert_interval(&pipeline.intervals[0], (block(0), block(2)));
@@ -2226,78 +2380,93 @@ mod tests {
         assert_interval(&pipeline.intervals[6], (block(15), block(20)));
 
         // download blocks and operations from 0 to 8
-        pipeline.block_downloaded(
-            &block(8),
-            &InnerBlockState {
-                block_downloaded: true,
-                applied: false,
-                operations_downloaded: true,
-            },
+        block_state_db.update_block(
+            block(8),
             block(7),
-        );
-        pipeline.block_downloaded(
-            &block(7),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(8), &block_state_db);
+
+        block_state_db.update_block(
+            block(7),
             block(6),
-        );
-        pipeline.block_downloaded(
-            &block(6),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(7), &block_state_db);
+
+        block_state_db.update_block(
+            block(6),
             block(5),
-        );
-        pipeline.block_downloaded(
-            &block(5),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(6), &block_state_db);
+
+        block_state_db.update_block(
+            block(5),
             block(4),
-        );
-        pipeline.block_downloaded(
-            &block(4),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(5), &block_state_db);
+
+        block_state_db.update_block(
+            block(4),
             block(3),
-        );
-        pipeline.block_downloaded(
-            &block(3),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(4), &block_state_db);
+
+        block_state_db.update_block(
+            block(3),
             block(2),
-        );
-        pipeline.block_downloaded(
-            &block(2),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
+        );
+        pipeline.block_downloaded(&block(3), &block_state_db);
+
+        block_state_db.update_block(
+            block(2),
             block(1),
-        );
-        pipeline.block_downloaded(
-            &block(1),
-            &InnerBlockState {
+            InnerBlockState {
                 block_downloaded: true,
                 applied: false,
                 operations_downloaded: true,
             },
-            block(0),
         );
+        pipeline.block_downloaded(&block(2), &block_state_db);
+
+        block_state_db.update_block(
+            block(1),
+            block(0),
+            InnerBlockState {
+                block_downloaded: true,
+                applied: false,
+                operations_downloaded: true,
+            },
+        );
+        pipeline.block_downloaded(&block(1), &block_state_db);
 
         // check all downloaded inervals
         assert!(pipeline.intervals[0].all_blocks_downloaded);
@@ -2306,14 +2475,14 @@ mod tests {
         assert!(pipeline.intervals[1].all_operations_downloaded);
 
         // next for apply with max batch 0
-        let next_batch = pipeline.find_next_block_to_apply(0);
+        let next_batch = pipeline.find_next_block_to_apply(0, &block_state_db);
         assert!(next_batch.is_some());
         let next_batch = next_batch.unwrap();
         assert_eq!(next_batch.block_to_apply.as_ref(), block(1).as_ref());
         assert_eq!(0, next_batch.successors_size());
 
         // next for apply with max batch 1
-        let next_batch = pipeline.find_next_block_to_apply(1);
+        let next_batch = pipeline.find_next_block_to_apply(1, &block_state_db);
         assert!(next_batch.is_some());
         let next_batch = next_batch.unwrap();
         assert_eq!(next_batch.block_to_apply.as_ref(), block(1).as_ref());
@@ -2321,7 +2490,7 @@ mod tests {
         assert_eq!(next_batch.successors[0].as_ref(), block(2).as_ref());
 
         // next for apply with max batch 100
-        let next_batch = pipeline.find_next_block_to_apply(100);
+        let next_batch = pipeline.find_next_block_to_apply(100, &block_state_db);
         assert!(next_batch.is_some());
         let next_batch = next_batch.unwrap();
         assert_eq!(next_batch.block_to_apply.as_ref(), block(1).as_ref());
@@ -2340,10 +2509,7 @@ mod tests {
         (expected_left, expected_right): (Arc<BlockHash>, Arc<BlockHash>),
     ) {
         assert_eq!(tested.blocks.len(), 2);
-        assert_eq!(tested.blocks[0].block_hash.as_ref(), expected_left.as_ref());
-        assert_eq!(
-            tested.blocks[1].block_hash.as_ref(),
-            expected_right.as_ref()
-        );
+        assert_eq!(tested.blocks[0].as_ref(), expected_left.as_ref());
+        assert_eq!(tested.blocks[1].as_ref(), expected_right.as_ref());
     }
 }
