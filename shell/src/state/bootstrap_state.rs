@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use riker::actors::*;
 use slog::{debug, info, warn, Logger};
@@ -19,7 +19,9 @@ use crypto::hash::{BlockHash, ChainId};
 use networking::PeerId;
 use tezos_messages::p2p::encoding::block_header::Level;
 
-use crate::peer_branch_bootstrapper::PeerBranchBootstrapperRef;
+use crate::peer_branch_bootstrapper::{
+    PeerBranchBootstrapperConfiguration, PeerBranchBootstrapperRef,
+};
 use crate::shell_channel::{ShellChannelMsg, ShellChannelRef, ShellChannelTopic};
 use crate::state::data_requester::DataRequester;
 use crate::state::peer_state::DataQueues;
@@ -59,29 +61,61 @@ impl BootstrapState {
 
     pub fn check_stalled_peers<DP: Fn(&PeerId)>(
         &mut self,
-        _stalled_timeout: Duration,
-        missing_branch_bootstrap_timeout: &Duration,
+        cfg: &PeerBranchBootstrapperConfiguration,
         log: &Logger,
         disconnect_peer: DP,
     ) {
         let stalled_peers = self.peers
             .values()
-            .filter(|PeerBootstrapState {empty_bootstrap_state, peer_id, ..}| {
-                let mut is_stalled = false;
+            .filter_map(|PeerBootstrapState {empty_bootstrap_state, peer_id, peer_queues, ..}| {
+                let mut is_stalled = None;
                 if let Some(empty_bootstrap_state) = empty_bootstrap_state.as_ref() {
-                    if empty_bootstrap_state.elapsed() > *missing_branch_bootstrap_timeout {
-                        warn!(log, "Peer did not sent new curent_head/current_branch for a long time";
-                           "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
-                        is_stalled = true;
+                    // 1. check empty bootstrap branches
+                    if empty_bootstrap_state.elapsed() > cfg.missing_new_branch_bootstrap_timeout {
+                        is_stalled = Some((peer_id.clone(), format!("Peer did not sent new curent_head/current_branch for a long time (timeout: {:?})", cfg.missing_new_branch_bootstrap_timeout)));
+                    }
+                }
+                // 2. check penalty peer for not responding to our block header requests on time
+                if is_stalled.is_none() {
+                    match peer_queues.is_block_response_pending(cfg.block_header_timeout)
+                    {
+                        Ok(response_pending) => {
+                            if response_pending {
+                                is_stalled = Some((peer_id.clone(), format!("Peer did not respond to our request for block header on time (timeout: {:?})", cfg.block_header_timeout)));
+                            }
+                        }
+                        Err(e) => {
+                            warn!(log, "Failed to resolve, if block response pending, for peer (so behave as ok)";
+                                                "reason" => format!("{}", e),
+                                                "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                        }
+                    }
+                }
+
+                // 2. check penalty peer for not responding to our block header requests on time
+                if is_stalled.is_none() {
+                    match peer_queues
+                        .is_block_operations_response_pending(cfg.block_operations_timeout)
+                    {
+                        Ok(response_pending) => {
+                            if response_pending {
+                                is_stalled = Some((peer_id.clone(), format!("Peer did not respond to our request for block operations on time (timeout: {:?})", cfg.block_operations_timeout)));
+                            }
+                        }
+                        Err(e) => {
+                            warn!(log, "Failed to resolve, if block operations response pending, for peer (so behave as ok)";
+                                                "reason" => format!("{}", e),
+                                                "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                        }
                     }
                 }
                 is_stalled
             })
-            .map(|peer_state| peer_state.peer_id.clone())
             .collect::<Vec<_>>();
 
-        for peer_id in stalled_peers {
+        for (peer_id, reason) in stalled_peers {
             warn!(log, "Disconnecting peer, because of stalled bootstrap pipeline";
+                       "reason" => reason,
                        "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
 
             self.clean_peer_data(peer_id.peer_ref.uri());
@@ -285,8 +319,7 @@ impl BootstrapState {
             }
 
             // try schedule
-            if let Err(e) = requester.fetch_block_headers(missing_blocks, peer_id, peer_queues, log)
-            {
+            if let Err(e) = requester.fetch_block_headers(missing_blocks, peer_id, peer_queues) {
                 warn!(log, "Failed to schedule block headers for download from peer"; "reason" => e,
                         "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
             }
@@ -342,9 +375,7 @@ impl BootstrapState {
             }
 
             // try schedule
-            if let Err(e) =
-                requester.fetch_block_operations(missing_blocks, peer_id, peer_queues, log)
-            {
+            if let Err(e) = requester.fetch_block_operations(missing_blocks, peer_id, peer_queues) {
                 warn!(log, "Failed to schedule block operations for download from peer"; "reason" => e,
                         "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
             }

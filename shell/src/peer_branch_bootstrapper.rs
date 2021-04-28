@@ -23,12 +23,9 @@ use crate::state::data_requester::{
 use crate::state::peer_state::DataQueues;
 use crate::subscription::subscribe_to_actor_terminated;
 
-/// After this timeout peer will be disconnected if no activity is done on any pipeline
+/// After this interval, we will check peers, if no activity is done on any pipeline
 /// So if peer does not change any branch bootstrap, we will disconnect it
-const STALE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60 * 3);
-
-/// If we have empty bootstrap pipelines for along time, we disconnect peer, means, peer is not provoding us a new current heads/branches
-const MISSING_NEW_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60 * 2);
+const STALE_BOOTSTRAP_PEER_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Constatnt for rescheduling of processing bootstrap pipelines
 const SCHEDULE_ONE_TIMER_DELAY: Duration = Duration::from_secs(1);
@@ -38,9 +35,7 @@ const LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Message commands [`PeerBranchBootstrapper`] to disconnect peer if any of bootstraping pipelines are stalled
 #[derive(Clone, Debug)]
-pub struct DisconnectStalledBootstraps {
-    timeout: Duration,
-}
+pub struct DisconnectStalledBootstraps;
 
 #[derive(Clone, Debug)]
 pub struct CleanPeerData(pub Arc<ActorUri>);
@@ -135,6 +130,40 @@ pub struct ApplyBlockBatchFailed {
     pub failed_block: Arc<BlockHash>,
 }
 
+#[derive(Clone)]
+pub struct PeerBranchBootstrapperConfiguration {
+    /// Timeout for request of block header
+    pub(crate) block_header_timeout: Duration,
+    /// Timeout for request of block operations
+    pub(crate) block_operations_timeout: Duration,
+    pub(crate) missing_new_branch_bootstrap_timeout: Duration,
+    max_bootstrap_interval_look_ahead_count: u8,
+    max_bootstrap_branches_per_peer: usize,
+    max_block_apply_batch: usize,
+}
+
+impl PeerBranchBootstrapperConfiguration {
+    pub fn new(
+        block_header_timeout: Duration,
+        block_operations_timeout: Duration,
+        missing_new_branch_bootstrap_timeout: Duration,
+        max_bootstrap_interval_look_ahead_count: u8,
+        max_bootstrap_branches_per_peer: usize,
+        max_block_apply_batch: usize,
+    ) -> Self {
+        Self {
+            block_header_timeout,
+            block_operations_timeout,
+            missing_new_branch_bootstrap_timeout,
+            max_bootstrap_interval_look_ahead_count,
+            max_bootstrap_branches_per_peer,
+            max_block_apply_batch,
+        }
+    }
+}
+
+pub type PeerBranchBootstrapperRef = ActorRef<PeerBranchBootstrapperMsg>;
+
 #[actor(
     StartBranchBootstraping,
     PingBootstrapPipelinesProcessing,
@@ -160,29 +189,6 @@ pub struct PeerBranchBootstrapper {
 
     cfg: PeerBranchBootstrapperConfiguration,
 }
-
-#[derive(Clone)]
-pub struct PeerBranchBootstrapperConfiguration {
-    max_bootstrap_interval_look_ahead_count: u8,
-    max_bootstrap_branches_per_peer: usize,
-    max_block_apply_batch: usize,
-}
-
-impl PeerBranchBootstrapperConfiguration {
-    pub fn new(
-        max_bootstrap_interval_look_ahead_count: u8,
-        max_bootstrap_branches_per_peer: usize,
-        max_block_apply_batch: usize,
-    ) -> Self {
-        Self {
-            max_bootstrap_interval_look_ahead_count,
-            max_bootstrap_branches_per_peer,
-            max_block_apply_batch,
-        }
-    }
-}
-
-pub type PeerBranchBootstrapperRef = ActorRef<PeerBranchBootstrapperMsg>;
 
 impl PeerBranchBootstrapper {
     /// Create new actor instance.
@@ -295,14 +301,11 @@ impl Actor for PeerBranchBootstrapper {
         subscribe_to_actor_terminated(ctx.system.sys_events(), ctx.myself());
 
         ctx.schedule::<Self::Msg, _>(
-            STALE_BOOTSTRAP_TIMEOUT,
-            STALE_BOOTSTRAP_TIMEOUT,
+            STALE_BOOTSTRAP_PEER_INTERVAL,
+            STALE_BOOTSTRAP_PEER_INTERVAL,
             ctx.myself(),
             None,
-            DisconnectStalledBootstraps {
-                timeout: STALE_BOOTSTRAP_TIMEOUT,
-            }
-            .into(),
+            DisconnectStalledBootstraps.into(),
         );
 
         ctx.schedule::<Self::Msg, _>(
@@ -539,7 +542,7 @@ impl Receive<DisconnectStalledBootstraps> for PeerBranchBootstrapper {
     fn receive(
         &mut self,
         ctx: &Context<Self::Msg>,
-        msg: DisconnectStalledBootstraps,
+        _: DisconnectStalledBootstraps,
         _: Option<BasicActorRef>,
     ) {
         let log = ctx.system.log();
@@ -551,14 +554,9 @@ impl Receive<DisconnectStalledBootstraps> for PeerBranchBootstrapper {
         } = self;
 
         bootstrap_state.check_bootstrapped_branches(shell_channel, &log);
-        bootstrap_state.check_stalled_peers(
-            msg.timeout,
-            &MISSING_NEW_BOOTSTRAP_TIMEOUT,
-            &log,
-            |peer| {
-                ctx.system.stop(peer.peer_ref.clone());
-            },
-        );
+        bootstrap_state.check_stalled_peers(&self.cfg, &log, |peer| {
+            ctx.system.stop(peer.peer_ref.clone());
+        });
 
         self.schedule_process_bootstrap_pipelines(ctx, SCHEDULE_ONE_TIMER_DELAY);
     }

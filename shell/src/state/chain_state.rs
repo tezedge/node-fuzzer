@@ -43,6 +43,15 @@ use crate::validation;
 /// Note: if needed, cound be refactored to cfg and struct
 pub(crate) mod bootstrap_constants {
     use crate::state::peer_state::DataQueuesLimits;
+    use std::time::Duration;
+
+    /// Timeout for request of block header
+    pub(crate) const BLOCK_HEADER_TIMEOUT: Duration = Duration::from_secs(120);
+    /// Timeout for request of block operations
+    pub(crate) const BLOCK_OPERATIONS_TIMEOUT: Duration = Duration::from_secs(120);
+
+    /// If we have empty bootstrap pipelines for along time, we disconnect peer, means, peer is not provoding us a new current heads/branches
+    pub(crate) const MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60 * 2);
 
     /// We can controll speedup of downloading blocks from network
     pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT: u8 = 10;
@@ -456,6 +465,9 @@ impl BlockchainState {
                         self.requester.clone(),
                         self.shell_channel.clone(),
                         PeerBranchBootstrapperConfiguration::new(
+                            bootstrap_constants::BLOCK_HEADER_TIMEOUT,
+                            bootstrap_constants::BLOCK_OPERATIONS_TIMEOUT,
+                            bootstrap_constants::MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT,
                             bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT,
                             bootstrap_constants::MAX_BOOTSTRAP_BRANCHES_PER_PEER,
                             bootstrap_constants::MAX_BLOCK_APPLY_BATCH,

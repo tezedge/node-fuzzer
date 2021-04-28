@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use failure::{format_err, Error};
+use itertools::{Itertools, MinMaxResult};
 use riker::actors::*;
 use slog::{debug, info, trace, warn, Logger};
 
@@ -1516,34 +1517,36 @@ impl Receive<LogStats> for ChainManager {
         for peer in self.peers.values() {
             debug!(log, "Peer state info";
                 "actor_ref" => format!("{}", peer.peer_id.peer_ref),
-                // "missing_blocks" => peer.missing_blocks.missing_data_count(),
-                // "missing_block_operations" => peer.missing_operations_for_blocks.missing_data_count(),
-                // "queued_block_headers" => peer.queued_block_headers.len(),
-                // "queued_block_operations" => peer.queued_block_operations.len(),
                 "current_head_request_secs" => peer.current_head_request_last.elapsed().as_secs(),
                 "current_head_response_secs" => peer.current_head_response_last.elapsed().as_secs(),
-                "block_request_secs" => {
-                    match peer.queues.block_request_last.try_read() {
-                        Ok(request_last) => format!("{}", request_last.elapsed().as_secs()),
-                        _ =>  "-failed-to-collect-".to_string(),
+                "queued_block_headers" => {
+                    match peer.queues.queued_block_headers.try_lock() {
+                        Ok(queued_block_headers) => {
+                            match queued_block_headers
+                                .iter()
+                                .map(|(_, requested_time)| requested_time)
+                                .minmax_by(|left_requested_time, right_requested_time| left_requested_time.cmp(right_requested_time)) {
+                                MinMaxResult::NoElements => "-empty-".to_string(),
+                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}", x.elapsed()),
+                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?})", queued_block_headers.len(), x.elapsed(), y.elapsed())
+                            }
+                        },
+                        _ =>  "-failed-to-collect-".to_string()
                     }
                 },
-                "block_response_secs" => {
-                    match peer.queues.block_response_last.try_read() {
-                        Ok(response_last) => format!("{}", response_last.elapsed().as_secs()),
-                        _ =>  "-failed-to-collect-".to_string(),
-                    }
-                },
-                "block_operations_request_secs" => {
-                    match peer.queues.block_operations_request_last.try_read() {
-                        Ok(request_last) => format!("{}", request_last.elapsed().as_secs()),
-                        _ =>  "-failed-to-collect-".to_string(),
-                    }
-                },
-                "block_operations_response_secs" => {
-                    match peer.queues.block_operations_response_last.try_read() {
-                        Ok(response_last) => format!("{}", response_last.elapsed().as_secs()),
-                        _ =>  "-failed-to-collect-".to_string(),
+                "queued_block_operations" => {
+                    match peer.queues.queued_block_operations.try_lock() {
+                        Ok(queued_block_operations) => {
+                            match queued_block_operations
+                                .iter()
+                                .map(|(_, (_, requested_time))| requested_time)
+                                .minmax_by(|left_requested_time, right_requested_time| left_requested_time.cmp(right_requested_time)) {
+                                MinMaxResult::NoElements => "-empty-".to_string(),
+                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}", x.elapsed()),
+                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?})", queued_block_operations.len(), x.elapsed(), y.elapsed())
+                            }
+                        },
+                        _ =>  "-failed-to-collect-".to_string()
                     }
                 },
                 "mempool_operations_request_secs" => peer.mempool_operations_request_last.elapsed().as_secs(),
@@ -1574,43 +1577,7 @@ impl Receive<DisconnectStalledPeers> for ChainManager {
                     None => true,
                 };
 
-                // chcek penalty peer for not responding to our requests on time
-                let block_response_pending = match state.is_block_response_pending(msg.silent_peer_timeout) {
-                    Ok(response_pending) => {
-                        if response_pending {
-                            warn!(ctx.system.log(), "Peer did not respond to our request for block on time";
-                                                "silent_peer_timeout_exceeded" => format!("{:?}", msg.silent_peer_timeout),
-                                                "peer_id" => state.peer_id.peer_id_marker.clone(), "peer_ip" => state.peer_id.peer_address.to_string(), "peer" => state.peer_id.peer_ref.name(), "peer_uri" => uri.to_string());
-                        }
-                        response_pending
-                    }
-                    Err(e) => {
-                        warn!(ctx.system.log(), "Failed to resolve, if block response pending, for peer (so behave as ok)";
-                                                "reason" => format!("{}", e),
-                                                "peer_id" => state.peer_id.peer_id_marker.clone(), "peer_ip" => state.peer_id.peer_address.to_string(), "peer" => state.peer_id.peer_ref.name(), "peer_uri" => uri.to_string());
-                        false
-                    }
-                };
-                let block_operations_response_pending = match state.is_block_operations_response_pending(msg.silent_peer_timeout) {
-                    Ok(response_pending) => {
-                        if response_pending {
-                            warn!(ctx.system.log(), "Peer did not respond to our request for block operations on time";
-                                                "silent_peer_timeout_exceeded" => format!("{:?}", msg.silent_peer_timeout),
-                                                "peer_id" => state.peer_id.peer_id_marker.clone(), "peer_ip" => state.peer_id.peer_address.to_string(), "peer" => state.peer_id.peer_ref.name(), "peer_uri" => uri.to_string());
-                        }
-                        response_pending
-                    }
-                    Err(e) => {
-                        warn!(ctx.system.log(), "Failed to resolve, if block operations response pending, for peer (so behave as ok)";
-                                                "reason" => format!("{}", e),
-                                                "peer_id" => state.peer_id.peer_id_marker.clone(), "peer_ip" => state.peer_id.peer_address.to_string(), "peer" => state.peer_id.peer_ref.name(), "peer_uri" => uri.to_string());
-                        false
-                    }
-                };
-
-                let should_disconnect = if block_response_pending || block_operations_response_pending {
-                    true
-                } else if current_head_response_pending && (state.current_head_request_last - state.current_head_response_last > msg.silent_peer_timeout) {
+                let should_disconnect = if current_head_response_pending && (state.current_head_request_last - state.current_head_response_last > msg.silent_peer_timeout) {
                     warn!(ctx.system.log(), "Peer did not respond to our request for current_head on time"; "request_secs" => state.current_head_request_last.elapsed().as_secs(), "response_secs" => state.current_head_response_last.elapsed().as_secs(),
                                             "peer_id" => state.peer_id.peer_id_marker.clone(), "peer_ip" => state.peer_id.peer_address.to_string(), "peer" => state.peer_id.peer_ref.name(), "peer_uri" => uri.to_string());
                     true
