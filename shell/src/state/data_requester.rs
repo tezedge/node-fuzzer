@@ -7,8 +7,7 @@
 //! We dont handle unique requests accross different peers, but if we want to, we just need to add here some synchronization.
 //! Now we just handle unique requests per peer.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use riker::actors::*;
@@ -25,7 +24,9 @@ use tezos_messages::p2p::encoding::prelude::{
 
 use crate::chain_feeder::{ApplyBlock, ChainFeederRef, ScheduleApplyBlock};
 use crate::peer_branch_bootstrapper::PeerBranchBootstrapperRef;
-use crate::state::peer_state::{DataQueues, MissingOperations, PeerState};
+use crate::state::peer_state::{
+    BlockHeaderQueueRef, BlockOperationsQueueRef, DataQueues, MissingOperations, PeerState,
+};
 use crate::state::{ApplyBlockBatch, StateError};
 use crate::utils::CondvarResult;
 use crate::validation;
@@ -65,7 +66,6 @@ impl DataRequester {
         mut blocks_to_download: Vec<Arc<BlockHash>>,
         peer: &PeerId,
         peer_queues: &DataQueues,
-        log: &Logger,
     ) -> Result<bool, StateError> {
         // check if empty
         if blocks_to_download.is_empty() {
@@ -88,7 +88,7 @@ impl DataRequester {
 
         // fillter non-queued and trim to queue capacity
         blocks_to_download
-            .retain(|block_hash| !peer_queued_block_headers.contains(block_hash.as_ref()));
+            .retain(|block_hash| !peer_queued_block_headers.contains_key(block_hash.as_ref()));
         blocks_to_download.truncate(available_capacity);
 
         // if empty finish
@@ -97,7 +97,10 @@ impl DataRequester {
         }
 
         // add to queue
-        peer_queued_block_headers.extend(blocks_to_download.clone());
+        blocks_to_download.iter().cloned().for_each(|btd| {
+            peer_queued_block_headers.insert(btd, Instant::now());
+        });
+
         // release lock
         drop(peer_queued_block_headers);
 
@@ -130,15 +133,6 @@ impl DataRequester {
             );
         }
 
-        // peer request stats
-        match peer_queues.block_request_last.write() {
-            Ok(mut request_last) => *request_last = Instant::now(),
-            Err(e) => {
-                warn!(log, "Failed to update block_request_last from peer"; "reason" => format!("{}", e),
-                                "peer_id" => peer.peer_id_marker.clone(), "peer_ip" => peer.peer_address.to_string(), "peer" => peer.peer_ref.name(), "peer_uri" => peer.peer_ref.uri().to_string());
-            }
-        }
-
         Ok(true)
     }
 
@@ -150,7 +144,6 @@ impl DataRequester {
         mut blocks_to_download: Vec<Arc<BlockHash>>,
         peer: &PeerId,
         peer_queues: &DataQueues,
-        log: &Logger,
     ) -> Result<bool, StateError> {
         // check if empty
         if blocks_to_download.is_empty() {
@@ -202,7 +195,14 @@ impl DataRequester {
         }
 
         // add to queue
-        let _ = peer_queued_block_headers.extend(blocks_to_download.clone());
+        blocks_to_download
+            .iter()
+            .cloned()
+            .for_each(|(block, missing_operations)| {
+                let _ =
+                    peer_queued_block_headers.insert(block, (missing_operations, Instant::now()));
+            });
+
         // release lock
         drop(peer_queued_block_headers);
 
@@ -242,15 +242,6 @@ impl DataRequester {
             );
         }
 
-        // peer request stats
-        match peer_queues.block_operations_request_last.write() {
-            Ok(mut request_last) => *request_last = Instant::now(),
-            Err(e) => {
-                warn!(log, "Failed to update block_operations_request_last from peer"; "reason" => format!("{}", e),
-                                "peer_id" => peer.peer_id_marker.clone(), "peer_ip" => peer.peer_address.to_string(), "peer" => peer.peer_ref.name(), "peer_uri" => peer.peer_ref.uri().to_string());
-            }
-        }
-
         Ok(true)
     }
 
@@ -270,19 +261,11 @@ impl DataRequester {
             .queues
             .queued_block_headers
             .lock()?
-            .contains(block_hash)
+            .contains_key(block_hash)
         {
             warn!(log, "Received unexpected block header from peer"; "block_header_hash" => block_hash.to_base58_check());
             peer.message_stats.increment_unexpected_response_block();
             return Ok(None);
-        }
-
-        // peer response stats
-        match peer.queues.block_response_last.write() {
-            Ok(mut response_last) => *response_last = Instant::now(),
-            Err(e) => {
-                warn!(log, "Failed to update block_response_last from peer"; "reason" => format!("{}", e))
-            }
         }
 
         // if contains, return data lock, when this lock will go out if the scope, then drop will be triggered, and queues will be emptied
@@ -313,7 +296,7 @@ impl DataRequester {
             .lock()?
             .get_mut(block_hash)
         {
-            Some(missing_operations) => {
+            Some((missing_operations, _)) => {
                 if !missing_operations.contains(&validation_pass) {
                     warn!(log, "Received unexpected block header operation's validation pass from peer"; "block_header_hash" => block_hash.to_base58_check(), "validation_pass" => validation_pass);
                     peer.message_stats
@@ -326,14 +309,6 @@ impl DataRequester {
                 peer.message_stats
                     .increment_unexpected_response_operations();
                 return Ok(None);
-            }
-        }
-
-        // peer response stats
-        match peer.queues.block_operations_response_last.write() {
-            Ok(mut response_last) => *response_last = Instant::now(),
-            Err(e) => {
-                warn!(log, "Failed to update block_operations_response_last from peer"; "reason" => format!("{}", e))
             }
         }
 
@@ -452,7 +427,7 @@ impl DataRequester {
 #[derive(Debug)]
 pub struct RequestedBlockDataLock {
     pub block_hash: Arc<BlockHash>,
-    queued_block_headers: Arc<Mutex<HashSet<Arc<BlockHash>>>>,
+    queued_block_headers: BlockHeaderQueueRef,
 }
 
 impl Drop for RequestedBlockDataLock {
@@ -471,13 +446,13 @@ impl Drop for RequestedBlockDataLock {
 pub struct RequestedOperationDataLock {
     validation_pass: i8,
     block_hash: Arc<BlockHash>,
-    queued_block_operations: Arc<Mutex<HashMap<Arc<BlockHash>, MissingOperations>>>,
+    queued_block_operations: BlockOperationsQueueRef,
 }
 
 impl Drop for RequestedOperationDataLock {
     fn drop(&mut self) {
         if let Ok(mut queue) = self.queued_block_operations.lock() {
-            if let Some(missing_operations) = queue.get_mut(&self.block_hash) {
+            if let Some((missing_operations, _)) = queue.get_mut(&self.block_hash) {
                 missing_operations.remove(&self.validation_pass);
                 if missing_operations.is_empty() {
                     queue.remove(&self.block_hash);
@@ -530,7 +505,7 @@ mod tests {
                     .queued_block_headers
                     .lock()
                     .unwrap()
-                    .contains($block)
+                    .contains_key($block)
             );
         }};
     }
@@ -547,7 +522,7 @@ mod tests {
             );
 
             match $queues.queued_block_operations.lock().unwrap().get($block) {
-                Some(missing_operations) => assert_eq!(missing_operations, $validation_passes),
+                Some((missing_operations, _)) => assert_eq!(missing_operations, $validation_passes),
                 None => {
                     if $expected {
                         panic!("test failed");
@@ -591,19 +566,14 @@ mod tests {
 
         // try schedule nothiing
         assert!(matches!(
-            data_requester.fetch_block_headers(vec![], &peer1.peer_id, &peer1.queues, &log),
+            data_requester.fetch_block_headers(vec![], &peer1.peer_id, &peer1.queues),
             Ok(false)
         ));
 
         // try schedule block1
         let block1 = block(1);
         assert!(matches!(
-            data_requester.fetch_block_headers(
-                vec![block1.clone()],
-                &peer1.peer_id,
-                &peer1.queues,
-                &log
-            ),
+            data_requester.fetch_block_headers(vec![block1.clone()], &peer1.peer_id, &peer1.queues),
             Ok(true)
         ));
 
@@ -612,12 +582,7 @@ mod tests {
 
         // try schedule block1 once more
         assert!(matches!(
-            data_requester.fetch_block_headers(
-                vec![block1.clone()],
-                &peer1.peer_id,
-                &peer1.queues,
-                &log
-            ),
+            data_requester.fetch_block_headers(vec![block1.clone()], &peer1.peer_id, &peer1.queues),
             Ok(false)
         ));
 
@@ -630,12 +595,7 @@ mod tests {
 
         // try schedule block1 once more while holding the lock (should not succeed, because block1 was not removed from queues, becuase we still hold the lock)
         assert!(matches!(
-            data_requester.fetch_block_headers(
-                vec![block1.clone()],
-                &peer1.peer_id,
-                &peer1.queues,
-                &log
-            ),
+            data_requester.fetch_block_headers(vec![block1.clone()], &peer1.peer_id, &peer1.queues),
             Ok(false)
         ));
 
@@ -647,7 +607,7 @@ mod tests {
 
         // we can reschedule it once more now
         assert!(matches!(
-            data_requester.fetch_block_headers(vec![block1], &peer1.peer_id, &peer1.queues, &log),
+            data_requester.fetch_block_headers(vec![block1], &peer1.peer_id, &peer1.queues),
             Ok(true)
         ));
 
@@ -682,7 +642,7 @@ mod tests {
 
         // try schedule nothiing
         assert!(matches!(
-            data_requester.fetch_block_operations(vec![], &peer1.peer_id, &peer1.queues, &log),
+            data_requester.fetch_block_operations(vec![], &peer1.peer_id, &peer1.queues),
             Ok(false)
         ));
 
@@ -691,8 +651,7 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues,
-                &log
+                &peer1.queues
             ),
             Ok(true)
         ));
@@ -705,8 +664,7 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues,
-                &log
+                &peer1.queues
             ),
             Ok(false)
         ));
@@ -727,8 +685,7 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues,
-                &log
+                &peer1.queues
             ),
             Ok(false)
         ));
@@ -744,8 +701,7 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues,
-                &log
+                &peer1.queues
             ),
             Ok(false)
         ));
@@ -780,12 +736,7 @@ mod tests {
 
         // we can reschedule it once more now
         assert!(matches!(
-            data_requester.fetch_block_operations(
-                vec![block1],
-                &peer1.peer_id,
-                &peer1.queues,
-                &log
-            ),
+            data_requester.fetch_block_operations(vec![block1], &peer1.peer_id, &peer1.queues),
             Ok(true)
         ));
 

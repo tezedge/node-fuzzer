@@ -3,7 +3,7 @@
 
 use std::cmp;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use riker::actors::*;
@@ -94,26 +94,6 @@ impl PeerState {
         }
     }
 
-    // TODO: TE-386 - remove not needed
-    // pub(crate) fn available_block_queue_capacity(&self) -> usize {
-    //     let queued_count = self.queued_block_headers.len();
-    //     if queued_count < BLOCK_HEADERS_BATCH_SIZE {
-    //         BLOCK_HEADERS_BATCH_SIZE - queued_count
-    //     } else {
-    //         0
-    //     }
-    // }
-
-    // TODO: TE-386 - remove not needed
-    // fn available_block_operations_queue_capacity(&self) -> usize {
-    //     let queued_count = self.queued_block_operations.len();
-    //     if queued_count < BLOCK_OPERATIONS_BATCH_SIZE {
-    //         BLOCK_OPERATIONS_BATCH_SIZE - queued_count
-    //     } else {
-    //         0
-    //     }
-    // }
-
     fn available_mempool_operations_queue_capacity(&self) -> usize {
         let queued_count = self.queued_mempool_operations.len();
         if queued_count < MEMPOOL_OPERATIONS_BATCH_SIZE {
@@ -148,107 +128,6 @@ impl PeerState {
         self.queued_mempool_operations.clear();
         self.missing_operations_for_blocks.clear();
     }
-
-    // TODO: TE-386 - remove not needed
-    // pub fn schedule_missing_blocks<MD>(
-    //     peers: &mut HashMap<ActorUri, PeerState>,
-    //     mut get_missing_blocks: MD,
-    // ) where
-    //     MD: FnMut(&mut PeerState, usize, Option<i32>) -> Vec<MissingBlock>,
-    // {
-    //     peers
-    //         .values_mut()
-    //         .filter(|peer| peer.current_head_level.is_some())
-    //         .filter(|peer| peer.available_block_queue_capacity() > 0)
-    //         .sorted_by_key(|peer| peer.available_block_queue_capacity())
-    //         .rev()
-    //         .for_each(|peer| {
-    //             let available_capacity = peer.available_block_queue_capacity();
-    //             let peer_current_head_level = peer.current_head_level;
-    //
-    //             let mut missing_blocks =
-    //                 get_missing_blocks(peer, available_capacity, peer_current_head_level);
-    //
-    //             if !missing_blocks.is_empty() {
-    //                 let queued_blocks = missing_blocks
-    //                     .drain(..)
-    //                     .filter_map(|missing_block| {
-    //                         let missing_block_hash = missing_block.block_hash.clone();
-    //                         if peer
-    //                             .queued_block_headers
-    //                             .insert(missing_block_hash.clone(), missing_block)
-    //                             .is_none()
-    //                         {
-    //                             // block was not already present in queue
-    //                             Some(missing_block_hash.as_ref().clone())
-    //                         } else {
-    //                             // block was already in queue
-    //                             None
-    //                         }
-    //                     })
-    //                     .collect::<Vec<_>>();
-    //
-    //                 if !queued_blocks.is_empty() {
-    //                     peer.block_request_last = Instant::now();
-    //                     tell_peer(GetBlockHeadersMessage::new(queued_blocks).into(), peer);
-    //                 }
-    //             }
-    //         });
-    // }
-    //
-    // pub fn schedule_missing_operations<MD>(
-    //     peers: &mut HashMap<ActorUri, PeerState>,
-    //     mut get_missing_operations: MD,
-    // ) where
-    //     MD: FnMut(&mut PeerState, usize, Option<i32>) -> Vec<MissingOperations>,
-    // {
-    //     peers
-    //         .values_mut()
-    //         .filter(|peer| peer.current_head_level.is_some())
-    //         .filter(|peer| peer.available_block_operations_queue_capacity() > 0)
-    //         .sorted_by_key(|peer| peer.available_block_operations_queue_capacity())
-    //         .rev()
-    //         .for_each(|peer| {
-    //             let available_capacity = peer.available_block_operations_queue_capacity();
-    //             let peer_current_head_level = peer.current_head_level;
-    //
-    //             let missing_operations =
-    //                 get_missing_operations(peer, available_capacity, peer_current_head_level);
-    //
-    //             if !missing_operations.is_empty() {
-    //                 let queued_operations = missing_operations
-    //                     .iter()
-    //                     .map(|missing_operation| {
-    //                         if peer
-    //                             .queued_block_operations
-    //                             .insert(
-    //                                 missing_operation.block_hash.clone(),
-    //                                 missing_operation.clone(),
-    //                             )
-    //                             .is_none()
-    //                         {
-    //                             // operations were not already present in queue
-    //                             Some(missing_operation)
-    //                         } else {
-    //                             // operations were already in queue
-    //                             None
-    //                         }
-    //                     })
-    //                     .filter_map(|missing_operation| missing_operation)
-    //                     .collect::<Vec<_>>();
-    //
-    //                 if !queued_operations.is_empty() {
-    //                     peer.block_operations_request_last = Instant::now();
-    //                     queued_operations.iter().for_each(|&missing_operation| {
-    //                         tell_peer(
-    //                             GetOperationsForBlocksMessage::new(missing_operation.into()).into(),
-    //                             peer,
-    //                         )
-    //                     });
-    //                 }
-    //             }
-    //         });
-    // }
 
     pub fn schedule_missing_operations_for_mempool(peers: &mut HashMap<ActorUri, PeerState>) {
         peers
@@ -292,31 +171,6 @@ impl PeerState {
                 }
             });
     }
-
-    pub(crate) fn is_block_response_pending(&self, timeout: Duration) -> Result<bool, StateError> {
-        let request_last = { *self.queues.block_request_last.read()? };
-        let response_last = { *self.queues.block_response_last.read()? };
-
-        Ok(if request_last > response_last {
-            request_last - response_last > timeout
-        } else {
-            false
-        })
-    }
-
-    pub(crate) fn is_block_operations_response_pending(
-        &self,
-        timeout: Duration,
-    ) -> Result<bool, StateError> {
-        let request_last = { *self.queues.block_operations_request_last.read()? };
-        let response_last = { *self.queues.block_operations_response_last.read()? };
-
-        Ok(if request_last > response_last {
-            request_last - response_last > timeout
-        } else {
-            false
-        })
-    }
 }
 
 /// Hold stats about peer received messages
@@ -345,36 +199,27 @@ impl Default for MessageStats {
 }
 
 pub type MissingOperations = HashSet<i8>;
+pub type BlockHeaderQueueRef = Arc<Mutex<HashMap<Arc<BlockHash>, Instant>>>;
+pub type BlockOperationsQueueRef =
+    Arc<Mutex<HashMap<Arc<BlockHash>, (MissingOperations, Instant)>>>;
 
 #[derive(Clone, Debug)]
 pub struct DataQueues {
     pub(crate) limits: DataQueuesLimits,
 
     /// Queued blocks shared with peer_branch_bootstrapper
-    pub(crate) queued_block_headers: Arc<Mutex<HashSet<Arc<BlockHash>>>>,
-    /// Last time we requested block from the peer
-    pub(crate) block_request_last: Arc<RwLock<Instant>>,
-    /// Last time we received block from the peer
-    pub(crate) block_response_last: Arc<RwLock<Instant>>,
+    pub(crate) queued_block_headers: BlockHeaderQueueRef,
 
     /// Queued block operations
-    pub(crate) queued_block_operations: Arc<Mutex<HashMap<Arc<BlockHash>, MissingOperations>>>,
-    /// Last time we requested block operations from the peer
-    pub(crate) block_operations_request_last: Arc<RwLock<Instant>>,
-    /// Last time we received block operations from the peer
-    pub(crate) block_operations_response_last: Arc<RwLock<Instant>>,
+    pub(crate) queued_block_operations: BlockOperationsQueueRef,
 }
 
 impl DataQueues {
     pub fn new(limits: DataQueuesLimits) -> Self {
         Self {
             limits,
-            queued_block_headers: Arc::new(Mutex::new(HashSet::default())),
-            block_request_last: Arc::new(RwLock::new(Instant::now())),
-            block_response_last: Arc::new(RwLock::new(Instant::now())),
+            queued_block_headers: Arc::new(Mutex::new(HashMap::default())),
             queued_block_operations: Arc::new(Mutex::new(HashMap::default())),
-            block_operations_request_last: Arc::new(RwLock::new(Instant::now())),
-            block_operations_response_last: Arc::new(RwLock::new(Instant::now())),
         }
     }
 
@@ -383,7 +228,7 @@ impl DataQueues {
     ) -> Result<(HashSet<Arc<BlockHash>>, usize), StateError> {
         // lock, get queued and release
         let already_queued: HashSet<Arc<BlockHash>> =
-            self.queued_block_headers.lock()?.iter().cloned().collect();
+            self.queued_block_headers.lock()?.keys().cloned().collect();
 
         let available =
             if already_queued.len() < self.limits.max_queued_block_headers_count as usize {
@@ -414,6 +259,25 @@ impl DataQueues {
             };
 
         Ok((already_queued, available))
+    }
+
+    pub(crate) fn is_block_response_pending(&self, timeout: Duration) -> Result<bool, StateError> {
+        Ok(self
+            .queued_block_headers
+            .lock()?
+            .iter()
+            .any(|(_, requested_time)| requested_time.elapsed().gt(&timeout)))
+    }
+
+    pub(crate) fn is_block_operations_response_pending(
+        &self,
+        timeout: Duration,
+    ) -> Result<bool, StateError> {
+        Ok(self
+            .queued_block_operations
+            .lock()?
+            .iter()
+            .any(|(_, (_, requested_time))| requested_time.elapsed().gt(&timeout)))
     }
 }
 
