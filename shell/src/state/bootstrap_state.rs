@@ -599,8 +599,7 @@ impl BranchState {
             if interval.all_blocks_downloaded {
                 continue;
             }
-
-            let count_before = blocks_to_download.len();
+            intervals_checked += 1;
 
             // let walk throught interval and resolve first missing block
             interval.collect_first_missing_block(
@@ -608,10 +607,6 @@ impl BranchState {
                 blocks_to_download,
                 block_state_db,
             );
-
-            if count_before != blocks_to_download.len() {
-                intervals_checked += 1;
-            }
 
             // check if we have enought
             if blocks_to_download.len() >= requested_count
@@ -643,8 +638,7 @@ impl BranchState {
             if interval.all_operations_downloaded {
                 continue;
             }
-
-            let count_before = blocks_to_download.len();
+            intervals_checked += 1;
 
             // let walk throught interval and resolve missing block from this interval
             interval.collect_block_with_missing_operations(
@@ -653,10 +647,6 @@ impl BranchState {
                 blocks_to_download,
                 block_state_db,
             );
-
-            if count_before != blocks_to_download.len() {
-                intervals_checked += 1;
-            }
 
             if blocks_to_download.len() >= requested_count
                 || max_bootstrap_interval_look_ahead_count <= intervals_checked
@@ -805,7 +795,7 @@ impl BranchState {
                     };
 
                     // if applied, then skip
-                    if block_state.applied {
+                    if block_state.applied || block_state.scheduled_for_apply {
                         break;
                     }
 
@@ -1357,7 +1347,18 @@ impl BlockStateDb {
         block_state.applied = true;
         block_state.scheduled_for_apply = false;
 
-        // TODO: all predecessor mark as applied and remove from memory?
+        // also mark all predecessors as applied
+        let mut predecessor_selector = block_state.predecessor_block_hash.clone();
+        while let Some(predecessor) = predecessor_selector {
+            predecessor_selector = match self.blocks.get_mut(&predecessor) {
+                Some(predecessor_state) => {
+                    predecessor_state.applied = true;
+                    predecessor_state.scheduled_for_apply = false;
+                    predecessor_state.predecessor_block_hash.clone()
+                }
+                None => None,
+            };
+        }
     }
 }
 
@@ -1992,33 +1993,93 @@ mod tests {
         assert_eq!(pipeline.intervals[0].blocks[1].as_ref(), block(2).as_ref());
 
         // trigger that block 2 is applied
-
-        println!("BEFORE - {:?}", pipeline.intervals[0].blocks);
         block_state_db.mark_block_applied(block(2));
         pipeline.block_applied(&block(2), &block_state_db);
-        println!("AFTER - {:?}", pipeline.intervals[0].blocks);
         assert_eq!(pipeline.intervals.len(), 6);
 
         // trigger that block 8 is applied
         block_state_db.mark_block_applied(block(8));
         pipeline.block_applied(&block(8), &block_state_db);
-        for (id, i) in pipeline.intervals.iter().enumerate() {
-            println!(
-                "{} : {:?}",
-                id,
-                i.blocks
-                    .iter()
-                    .map(|b| b.as_ref().clone())
-                    .collect::<Vec<_>>()
-            );
-        }
         assert_eq!(pipeline.intervals.len(), 4);
+
+        // download 20 -> 19 -> 18 -> 17
+        block_state_db.update_block(
+            block(20),
+            block(19),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        block_state_db.update_block(
+            block(19),
+            block(18),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        block_state_db.update_block(
+            block(18),
+            block(17),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        assert!(
+            !block_state_db
+                .blocks
+                .get(block(20).as_ref())
+                .unwrap()
+                .applied
+        );
+        assert!(
+            !block_state_db
+                .blocks
+                .get(block(19).as_ref())
+                .unwrap()
+                .applied
+        );
+        assert!(
+            !block_state_db
+                .blocks
+                .get(block(18).as_ref())
+                .unwrap()
+                .applied
+        );
 
         // trigger that last block is applied
         block_state_db.mark_block_applied(block(20));
-        pipeline.block_applied(&block(20), &block_state_db);
 
-        println!("intervals: {}", pipeline.intervals.len());
+        // direct predecessors should be marked as applied
+        assert!(
+            block_state_db
+                .blocks
+                .get(block(20).as_ref())
+                .unwrap()
+                .applied
+        );
+        assert!(
+            block_state_db
+                .blocks
+                .get(block(19).as_ref())
+                .unwrap()
+                .applied
+        );
+        assert!(
+            block_state_db
+                .blocks
+                .get(block(18).as_ref())
+                .unwrap()
+                .applied
+        );
+
+        // mark pipeline - should remove all intervals now
+        pipeline.block_applied(&block(20), &block_state_db);
 
         // interval 0 was removed
         assert!(pipeline.is_done());

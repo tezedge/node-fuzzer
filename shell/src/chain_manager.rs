@@ -1527,8 +1527,8 @@ impl Receive<LogStats> for ChainManager {
                                 .map(|(_, requested_time)| requested_time)
                                 .minmax_by(|left_requested_time, right_requested_time| left_requested_time.cmp(right_requested_time)) {
                                 MinMaxResult::NoElements => "-empty-".to_string(),
-                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}", x.elapsed()),
-                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?})", queued_block_headers.len(), x.elapsed(), y.elapsed())
+                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}, {:?}", x.elapsed(), queued_block_headers.keys().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(", ")),
+                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?}, {:?})", queued_block_headers.len(), x.elapsed(), y.elapsed(), queued_block_headers.keys().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(", "))
                             }
                         },
                         _ =>  "-failed-to-collect-".to_string()
@@ -1643,7 +1643,7 @@ impl Receive<CheckMempoolCompleteness> for ChainManager {
 impl Receive<NetworkChannelMsg> for ChainManager {
     type Msg = ChainManagerMsg;
 
-    fn receive(&mut self, ctx: &Context<Self::Msg>, msg: NetworkChannelMsg, _sender: Sender) {
+    fn receive(&mut self, ctx: &Context<Self::Msg>, msg: NetworkChannelMsg, _: Sender) {
         match self.process_network_channel_message(ctx, msg) {
             Ok(_) => (),
             Err(e) => {
