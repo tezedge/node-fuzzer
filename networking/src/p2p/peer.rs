@@ -581,7 +581,7 @@ async fn begin_process_incoming(
                                 .into(),
                                 topic: NetworkChannelTopic::NetworkEvents.into(),
                             },
-                            Some(myself.clone().into()),
+                            None,
                         );
                     }
                 }
