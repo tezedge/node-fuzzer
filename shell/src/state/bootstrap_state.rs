@@ -1013,28 +1013,38 @@ impl BranchInterval {
                     Some(state) => {
                         if !state.block_downloaded {
                             if ignored_blocks.contains(b) {
-                                // already scheduled
-                                return;
+                                // already scheduled, just continue
+                                previous = Some(b);
+                                continue;
                             }
                             if !blocks_to_download.contains(b) {
                                 // add for download
                                 blocks_to_download.push(b.clone());
+                                return;
                             }
-                            return;
+
+                            // already scheduled, just continue
+                            previous = Some(b);
+                            continue;
                         } else {
                             state
                         }
                     }
                     None => {
                         if ignored_blocks.contains(b) {
-                            // already scheduled
-                            return;
+                            // already scheduled, just continue
+                            previous = Some(b);
+                            continue;
                         }
                         if !blocks_to_download.contains(b) {
                             // add for download
                             blocks_to_download.push(b.clone());
+                            return;
                         }
-                        return;
+
+                        // already scheduled, just continue
+                        previous = Some(b);
+                        continue;
                     }
                 };
 
@@ -1058,8 +1068,8 @@ impl BranchInterval {
                             if !blocks_to_download.contains(b) {
                                 // add for download
                                 blocks_to_download.push(b.clone());
+                                return;
                             }
-                            return;
                         }
                     }
                 }
@@ -2058,6 +2068,281 @@ mod tests {
         assert_eq!(2, blocks_to_download.len());
         assert_eq!(blocks_to_download[0].as_ref(), block(2).as_ref());
         assert_eq!(blocks_to_download[1].as_ref(), block(8).as_ref());
+    }
+
+    #[test]
+    fn test_collect_next_blocks_to_download_feed_interval() {
+        // genesis
+        let last_applied = block(0);
+        // history blocks
+        let history: Vec<Arc<BlockHash>> = vec![
+            block(2),
+            block(5),
+            block(8),
+            block(10),
+            block(13),
+            block(15),
+            block(20),
+            block(25),
+            block(30),
+            block(35),
+            block(40),
+            block(43),
+            block(46),
+            block(49),
+            block(52),
+            block(53),
+            block(56),
+            block(59),
+            block(60),
+        ];
+
+        // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
+        let mut pipeline1 = BranchState::new(last_applied.clone(), history.clone(), Arc::new(60));
+        assert_eq!(pipeline1.intervals.len(), 19);
+        assert_interval(&pipeline1.intervals[0], (block(0), block(2)));
+        assert_interval(&pipeline1.intervals[1], (block(2), block(5)));
+        assert_interval(&pipeline1.intervals[2], (block(5), block(8)));
+        assert_interval(&pipeline1.intervals[3], (block(8), block(10)));
+        assert_interval(&pipeline1.intervals[4], (block(10), block(13)));
+        assert_interval(&pipeline1.intervals[5], (block(13), block(15)));
+        assert_interval(&pipeline1.intervals[6], (block(15), block(20)));
+        assert_interval(&pipeline1.intervals[7], (block(20), block(25)));
+        assert_interval(&pipeline1.intervals[8], (block(25), block(30)));
+        assert_interval(&pipeline1.intervals[9], (block(30), block(35)));
+        assert_interval(&pipeline1.intervals[10], (block(35), block(40)));
+        assert_interval(&pipeline1.intervals[11], (block(40), block(43)));
+        assert_interval(&pipeline1.intervals[12], (block(43), block(46)));
+        assert_interval(&pipeline1.intervals[13], (block(46), block(49)));
+        assert_interval(&pipeline1.intervals[14], (block(49), block(52)));
+        assert_interval(&pipeline1.intervals[15], (block(52), block(53)));
+        assert_interval(&pipeline1.intervals[16], (block(53), block(56)));
+        assert_interval(&pipeline1.intervals[17], (block(56), block(59)));
+        assert_interval(&pipeline1.intervals[18], (block(59), block(60)));
+
+        // try to get schedule blocks for download
+        let mut blocks_to_download1 = Vec::new();
+        pipeline1.collect_next_blocks_to_download(
+            15,
+            10,
+            &HashSet::default(),
+            &mut blocks_to_download1,
+            &block_state_db,
+        );
+        assert_eq!(10, blocks_to_download1.len());
+        assert_eq!(blocks_to_download1[0].as_ref(), block(2).as_ref());
+        assert_eq!(blocks_to_download1[1].as_ref(), block(5).as_ref());
+        assert_eq!(blocks_to_download1[2].as_ref(), block(8).as_ref());
+        assert_eq!(blocks_to_download1[3].as_ref(), block(10).as_ref());
+        assert_eq!(blocks_to_download1[4].as_ref(), block(13).as_ref());
+        assert_eq!(blocks_to_download1[5].as_ref(), block(15).as_ref());
+        assert_eq!(blocks_to_download1[6].as_ref(), block(20).as_ref());
+        assert_eq!(blocks_to_download1[7].as_ref(), block(25).as_ref());
+        assert_eq!(blocks_to_download1[8].as_ref(), block(30).as_ref());
+        assert_eq!(blocks_to_download1[9].as_ref(), block(35).as_ref());
+
+        // download 8
+        block_state_db.update_block(
+            block(8),
+            block(7),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        pipeline1.block_downloaded(&block(8), &block_state_db);
+        // download 7
+        block_state_db.update_block(
+            block(7),
+            block(6),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        pipeline1.block_downloaded(&block(7), &block_state_db);
+        // download 20
+        block_state_db.update_block(
+            block(20),
+            block(19),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        // download 19
+        block_state_db.update_block(
+            block(19),
+            block(18),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        // download 18
+        block_state_db.update_block(
+            block(18),
+            block(17),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        // download 17
+        block_state_db.update_block(
+            block(17),
+            block(16),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+
+        // start new pipeline
+        let history: Vec<Arc<BlockHash>> = vec![
+            block(8),
+            block(10),
+            block(13),
+            block(15),
+            block(20),
+            block(25),
+            block(30),
+            block(35),
+            block(40),
+            block(43),
+            block(46),
+            block(49),
+            block(52),
+            block(53),
+            block(56),
+            block(59),
+            block(60),
+            block(63),
+            block(65),
+        ];
+        let mut pipeline2 = BranchState::new(last_applied.clone(), history.clone(), Arc::new(60));
+        assert_eq!(pipeline2.intervals.len(), 19);
+        assert_interval(&pipeline2.intervals[0], (block(0), block(8)));
+        assert_interval(&pipeline2.intervals[1], (block(8), block(10)));
+        assert_interval(&pipeline2.intervals[2], (block(10), block(13)));
+        assert_interval(&pipeline2.intervals[3], (block(13), block(15)));
+        assert_interval(&pipeline2.intervals[4], (block(15), block(20)));
+        assert_interval(&pipeline2.intervals[5], (block(20), block(25)));
+        assert_interval(&pipeline2.intervals[6], (block(25), block(30)));
+        assert_interval(&pipeline2.intervals[7], (block(30), block(35)));
+        assert_interval(&pipeline2.intervals[8], (block(35), block(40)));
+        assert_interval(&pipeline2.intervals[9], (block(40), block(43)));
+        assert_interval(&pipeline2.intervals[10], (block(43), block(46)));
+        assert_interval(&pipeline2.intervals[11], (block(46), block(49)));
+        assert_interval(&pipeline2.intervals[12], (block(49), block(52)));
+        assert_interval(&pipeline2.intervals[13], (block(52), block(53)));
+        assert_interval(&pipeline2.intervals[14], (block(53), block(56)));
+        assert_interval(&pipeline2.intervals[15], (block(56), block(59)));
+        assert_interval(&pipeline2.intervals[16], (block(59), block(60)));
+        assert_interval(&pipeline2.intervals[17], (block(60), block(63)));
+        assert_interval(&pipeline2.intervals[18], (block(63), block(65)));
+
+        // try to get schedule blocks for download
+        let mut blocks_to_download2 = Vec::new();
+        pipeline2.collect_next_blocks_to_download(
+            15,
+            10,
+            &HashSet::default(),
+            &mut blocks_to_download2,
+            &block_state_db,
+        );
+
+        // check pre-feeded intervals (with blocks downloaded before)
+        assert_eq!(pipeline2.intervals[0].blocks.len(), 4);
+        assert_eq!(pipeline2.intervals[0].blocks[0].as_ref(), block(0).as_ref());
+        assert_eq!(pipeline2.intervals[0].blocks[1].as_ref(), block(6).as_ref());
+        assert_eq!(pipeline2.intervals[0].blocks[2].as_ref(), block(7).as_ref());
+        assert_eq!(pipeline2.intervals[0].blocks[3].as_ref(), block(8).as_ref());
+
+        assert_eq!(pipeline2.intervals[1].blocks.len(), 2);
+        assert_eq!(pipeline2.intervals[1].blocks[0].as_ref(), block(8).as_ref());
+        assert_eq!(
+            pipeline2.intervals[1].blocks[1].as_ref(),
+            block(10).as_ref()
+        );
+
+        assert_eq!(pipeline2.intervals[2].blocks.len(), 2);
+        assert_eq!(
+            pipeline2.intervals[2].blocks[0].as_ref(),
+            block(10).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[2].blocks[1].as_ref(),
+            block(13).as_ref()
+        );
+
+        assert_eq!(pipeline2.intervals[3].blocks.len(), 2);
+        assert_eq!(
+            pipeline2.intervals[3].blocks[0].as_ref(),
+            block(13).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[3].blocks[1].as_ref(),
+            block(15).as_ref()
+        );
+
+        assert_eq!(pipeline2.intervals[4].blocks.len(), 6);
+        assert_eq!(
+            pipeline2.intervals[4].blocks[0].as_ref(),
+            block(15).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[4].blocks[1].as_ref(),
+            block(16).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[4].blocks[2].as_ref(),
+            block(17).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[4].blocks[3].as_ref(),
+            block(18).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[4].blocks[4].as_ref(),
+            block(19).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[4].blocks[5].as_ref(),
+            block(20).as_ref()
+        );
+
+        assert_eq!(pipeline2.intervals[5].blocks.len(), 2);
+        assert_eq!(
+            pipeline2.intervals[5].blocks[0].as_ref(),
+            block(20).as_ref()
+        );
+        assert_eq!(
+            pipeline2.intervals[5].blocks[1].as_ref(),
+            block(25).as_ref()
+        );
+
+        assert_eq!(10, blocks_to_download2.len());
+        assert_eq!(blocks_to_download2[0].as_ref(), block(6).as_ref());
+        assert_eq!(blocks_to_download2[1].as_ref(), block(10).as_ref());
+        assert_eq!(blocks_to_download2[2].as_ref(), block(13).as_ref());
+        assert_eq!(blocks_to_download2[3].as_ref(), block(15).as_ref());
+        assert_eq!(blocks_to_download2[4].as_ref(), block(16).as_ref());
+        assert_eq!(blocks_to_download2[5].as_ref(), block(25).as_ref());
+        assert_eq!(blocks_to_download2[6].as_ref(), block(30).as_ref());
+        assert_eq!(blocks_to_download2[7].as_ref(), block(35).as_ref());
+        assert_eq!(blocks_to_download2[8].as_ref(), block(40).as_ref());
+        assert_eq!(blocks_to_download2[9].as_ref(), block(43).as_ref());
     }
 
     #[test]
