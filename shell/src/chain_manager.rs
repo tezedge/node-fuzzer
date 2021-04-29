@@ -23,6 +23,7 @@ use slog::{debug, info, trace, warn, Logger};
 use crypto::hash::{BlockHash, ChainId, CryptoboxPublicKeyHash, OperationHash};
 use crypto::seeded_step::Seed;
 use networking::p2p::network_channel::{NetworkChannelMsg, NetworkChannelRef, NetworkChannelTopic};
+use networking::PeerId;
 use storage::mempool_storage::MempoolOperationType;
 use storage::PersistentStorage;
 use storage::{
@@ -441,6 +442,7 @@ impl ChainManager {
                                         shell_channel,
                                         &log,
                                         Some(requested_data),
+                                        peer.peer_id.clone(),
                                     )?;
                                 }
                             }
@@ -496,6 +498,7 @@ impl ChainManager {
                                         block_hash.clone(),
                                         operations,
                                         Some(requested_data),
+                                        peer.peer_id.clone(),
                                     )? {
                                         stats.unseen_block_operations_count += 1;
 
@@ -571,6 +574,7 @@ impl ChainManager {
                                                 shell_channel,
                                                 &log,
                                                 None,
+                                                peer.peer_id.clone(),
                                             )?;
 
                                             // here we accept head, which also means that we know predecessor
@@ -868,9 +872,10 @@ impl ChainManager {
         shell_channel: &ShellChannelRef,
         log: &Logger,
         data_lock: Option<RequestedBlockDataLock>,
+        peer: Arc<PeerId>,
     ) -> Result<(), Error> {
         // store header
-        if chain_state.process_block_header_from_peer(&received_block, log, data_lock)? {
+        if chain_state.process_block_header_from_peer(&received_block, log, data_lock, peer)? {
             // update stats for new header
             stats.unseen_block_last = Instant::now();
             stats.unseen_block_count += 1;

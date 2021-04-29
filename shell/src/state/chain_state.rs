@@ -10,6 +10,7 @@ use slog::Logger;
 
 use crypto::hash::{BlockHash, ChainId, ProtocolHash};
 use crypto::seeded_step::{Seed, Step};
+use networking::PeerId;
 use storage::block_meta_storage::Meta;
 use storage::chain_meta_storage::ChainMetaStorageReader;
 use storage::PersistentStorage;
@@ -42,8 +43,9 @@ use crate::validation;
 ///
 /// Note: if needed, cound be refactored to cfg and struct
 pub(crate) mod bootstrap_constants {
-    use crate::state::peer_state::DataQueuesLimits;
     use std::time::Duration;
+
+    use crate::state::peer_state::DataQueuesLimits;
 
     /// Timeout for request of block header
     pub(crate) const BLOCK_HEADER_TIMEOUT: Duration = Duration::from_secs(120);
@@ -506,6 +508,7 @@ impl BlockchainState {
         received_block: &BlockHeaderWithHash,
         log: &Logger,
         data_lock: Option<RequestedBlockDataLock>,
+        peer: Arc<PeerId>,
     ) -> Result<bool, StorageError> {
         // store block
         let is_new_block = self.block_storage.put_block_header(received_block)?;
@@ -522,6 +525,7 @@ impl BlockchainState {
         if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper() {
             peer_branch_bootstrapper.tell(
                 UpdateBlockState::new(
+                    peer,
                     received_block.hash.clone(),
                     received_block.header.predecessor().clone(),
                     InnerBlockState {
@@ -612,6 +616,7 @@ impl BlockchainState {
         block_hash: BlockHash,
         message: &OperationsForBlocksMessage,
         data_lock: Option<RequestedOperationDataLock>,
+        peer: Arc<PeerId>,
     ) -> Result<bool, StateError> {
         // TODO: TE-369 - optimize double check
         // we need to differ this flag
@@ -627,8 +632,10 @@ impl BlockchainState {
         if are_operations_complete {
             // ping branch bootstrapper with received operations
             if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper.as_ref() {
-                peer_branch_bootstrapper
-                    .tell(UpdateOperationsState::new(block_hash, data_lock), None);
+                peer_branch_bootstrapper.tell(
+                    UpdateOperationsState::new(peer, block_hash, data_lock),
+                    None,
+                );
             }
         }
 

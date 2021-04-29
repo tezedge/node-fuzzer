@@ -77,13 +77,18 @@ impl StartBranchBootstraping {
 #[derive(Clone, Debug)]
 pub struct UpdateOperationsState {
     block_hash: BlockHash,
-
+    peer_id: Arc<PeerId>,
     data_lock: Option<Arc<RequestedOperationDataLock>>,
 }
 
 impl UpdateOperationsState {
-    pub fn new(block_hash: BlockHash, data_lock: Option<RequestedOperationDataLock>) -> Self {
+    pub fn new(
+        peer_id: Arc<PeerId>,
+        block_hash: BlockHash,
+        data_lock: Option<RequestedOperationDataLock>,
+    ) -> Self {
         Self {
+            peer_id,
             block_hash,
             data_lock: data_lock.map(Arc::new),
         }
@@ -95,18 +100,20 @@ pub struct UpdateBlockState {
     block_hash: BlockHash,
     predecessor_block_hash: BlockHash,
     new_state: InnerBlockState,
-
+    peer_id: Arc<PeerId>,
     data_lock: Option<Arc<RequestedBlockDataLock>>,
 }
 
 impl UpdateBlockState {
     pub fn new(
+        peer_id: Arc<PeerId>,
         block_hash: BlockHash,
         predecessor_block_hash: BlockHash,
         new_state: InnerBlockState,
         data_lock: Option<RequestedBlockDataLock>,
     ) -> Self {
         Self {
+            peer_id,
             block_hash,
             predecessor_block_hash,
             new_state,
@@ -230,6 +237,7 @@ impl PeerBranchBootstrapper {
         &mut self,
         ctx: &Context<PeerBranchBootstrapperMsg>,
         log: &Logger,
+        peer: Option<Arc<PeerId>>,
     ) {
         let PeerBranchBootstrapper {
             bootstrap_state,
@@ -242,6 +250,7 @@ impl PeerBranchBootstrapper {
 
         // schedule missing blocks for download
         bootstrap_state.schedule_blocks_to_download(
+            &peer,
             requester,
             cfg.max_bootstrap_interval_look_ahead_count,
             log,
@@ -249,6 +258,7 @@ impl PeerBranchBootstrapper {
 
         // schedule missing operations for download
         bootstrap_state.schedule_operations_to_download(
+            &peer,
             requester,
             cfg.max_bootstrap_interval_look_ahead_count,
             log,
@@ -384,7 +394,7 @@ impl Receive<StartBranchBootstraping> for PeerBranchBootstrapper {
 
         // add new branch (if possible)
         self.bootstrap_state.add_new_branch(
-            msg.peer_id,
+            msg.peer_id.clone(),
             msg.peer_queues,
             msg.last_applied_block,
             msg.missing_history,
@@ -394,7 +404,7 @@ impl Receive<StartBranchBootstraping> for PeerBranchBootstrapper {
         );
 
         // process
-        self.process_bootstrap_pipelines(ctx, &log)
+        self.process_bootstrap_pipelines(ctx, &log, Some(msg.peer_id))
     }
 }
 
@@ -407,7 +417,7 @@ impl Receive<PingBootstrapPipelinesProcessing> for PeerBranchBootstrapper {
         _: PingBootstrapPipelinesProcessing,
         _: Option<BasicActorRef>,
     ) {
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), None);
     }
 }
 
@@ -472,12 +482,13 @@ impl Receive<UpdateBlockState> for PeerBranchBootstrapper {
             predecessor_block_hash,
             new_state,
             data_lock,
+            peer_id,
         } = msg;
         self.bootstrap_state
             .block_downloaded(block_hash, predecessor_block_hash, new_state);
 
         // process bootstrap
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(peer_id));
 
         // explicit drop (not needed)
         drop(data_lock);
@@ -498,7 +509,7 @@ impl Receive<UpdateOperationsState> for PeerBranchBootstrapper {
             .block_operations_downloaded(msg.block_hash);
 
         // process
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(msg.peer_id));
 
         // explicit drop (not needed)
         drop(msg.data_lock);
@@ -518,7 +529,7 @@ impl Receive<ApplyBlockBatchDone> for PeerBranchBootstrapper {
         self.bootstrap_state.block_applied(msg.last_applied);
 
         // process
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log())
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), None)
     }
 }
 
@@ -531,8 +542,12 @@ impl Receive<ApplyBlockBatchFailed> for PeerBranchBootstrapper {
         msg: ApplyBlockBatchFailed,
         _: Option<BasicActorRef>,
     ) {
+        // process message
         self.bootstrap_state
             .block_apply_failed(&msg.failed_block, &ctx.system.log());
+
+        // process
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), None)
     }
 }
 
