@@ -220,6 +220,32 @@ impl BootstrapState {
             })
     }
 
+    pub fn next_lowest_missing_blocks(&self) -> Vec<&Arc<BlockHash>> {
+        self.peers
+            .values()
+            .filter_map(|peer_state| {
+                Some(
+                    peer_state
+                        .branches
+                        .iter()
+                        .filter_map(|branch| {
+                            if let Some(first_interval) = branch.intervals.get(0) {
+                                if let Some(second_block) = first_interval.blocks.get(1) {
+                                    Some(second_block)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .collect()
+    }
+
     pub fn add_new_branch(
         &mut self,
         peer_id: Arc<PeerId>,
