@@ -52,6 +52,10 @@ pub(crate) mod bootstrap_constants {
     /// Timeout for request of block operations
     pub(crate) const BLOCK_OPERATIONS_TIMEOUT: Duration = Duration::from_secs(120);
 
+    /// If we still did not receive requested header, we will give chance to another peer
+    /// Other word, we limit uniquenness request till this timeout
+    pub(crate) const BLOCK_DATA_RESCHEDULE_TIMEOUT: Duration = Duration::from_secs(20);
+
     /// If we have empty bootstrap pipelines for along time, we disconnect peer, means, peer is not provoding us a new current heads/branches
     pub(crate) const MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60 * 2);
 
@@ -469,6 +473,7 @@ impl BlockchainState {
                         PeerBranchBootstrapperConfiguration::new(
                             bootstrap_constants::BLOCK_HEADER_TIMEOUT,
                             bootstrap_constants::BLOCK_OPERATIONS_TIMEOUT,
+                            bootstrap_constants::BLOCK_DATA_RESCHEDULE_TIMEOUT,
                             bootstrap_constants::MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT,
                             bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT,
                             bootstrap_constants::MAX_BOOTSTRAP_BRANCHES_PER_PEER,

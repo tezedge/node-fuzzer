@@ -139,12 +139,17 @@ pub struct ApplyBlockBatchFailed {
 
 #[derive(Clone)]
 pub struct PeerBranchBootstrapperConfiguration {
-    /// Timeout for request of block header
+    /// Timeout for request of block header from one peer
     pub(crate) block_header_timeout: Duration,
     /// Timeout for request of block operations
     pub(crate) block_operations_timeout: Duration,
     pub(crate) missing_new_branch_bootstrap_timeout: Duration,
-    max_bootstrap_interval_look_ahead_count: u8,
+
+    /// If we still did not receive requested header, we will give chance to another peer
+    /// Other word, we limit uniquenness request till this timeout
+    pub(crate) block_data_reschedule_timeout: Duration,
+
+    pub(crate) max_bootstrap_interval_look_ahead_count: u8,
     max_bootstrap_branches_per_peer: usize,
     max_block_apply_batch: usize,
 }
@@ -153,6 +158,7 @@ impl PeerBranchBootstrapperConfiguration {
     pub fn new(
         block_header_timeout: Duration,
         block_operations_timeout: Duration,
+        block_data_reschedule_timeout: Duration,
         missing_new_branch_bootstrap_timeout: Duration,
         max_bootstrap_interval_look_ahead_count: u8,
         max_bootstrap_branches_per_peer: usize,
@@ -161,6 +167,7 @@ impl PeerBranchBootstrapperConfiguration {
         Self {
             block_header_timeout,
             block_operations_timeout,
+            block_data_reschedule_timeout,
             missing_new_branch_bootstrap_timeout,
             max_bootstrap_interval_look_ahead_count,
             max_bootstrap_branches_per_peer,
@@ -249,20 +256,10 @@ impl PeerBranchBootstrapper {
         } = self;
 
         // schedule missing blocks for download
-        bootstrap_state.schedule_blocks_to_download(
-            &peer,
-            requester,
-            cfg.max_bootstrap_interval_look_ahead_count,
-            log,
-        );
+        bootstrap_state.schedule_blocks_to_download(&peer, requester, cfg, log);
 
         // schedule missing operations for download
-        bootstrap_state.schedule_operations_to_download(
-            &peer,
-            requester,
-            cfg.max_bootstrap_interval_look_ahead_count,
-            log,
-        );
+        bootstrap_state.schedule_operations_to_download(&peer, requester, cfg, log);
 
         // schedule missing operations for download
         bootstrap_state.schedule_blocks_for_apply(
@@ -440,6 +437,8 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
                 processing_blocks_operations_downloaded,
                 processing_blocks_applied,
                 processing_blocks_scheduled_for_apply,
+                processing_blocks_scheduled_for_block_header_download,
+                processing_blocks_scheduled_for_block_operations_download,
             ),
         ) = self.bootstrap_state.blocks_stats();
         let (
@@ -463,6 +462,8 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
                    "processing_blocks_operations_downloaded" => processing_blocks_operations_downloaded,
                    "processing_blocks_applied" => processing_blocks_applied,
                    "processing_blocks_scheduled_for_apply" => processing_blocks_scheduled_for_apply,
+                   "processing_blocks_scheduled_for_block_header_download" => processing_blocks_scheduled_for_block_header_download,
+                   "processing_blocks_scheduled_for_block_operations_download" => processing_blocks_scheduled_for_block_operations_download,
         );
     }
 }

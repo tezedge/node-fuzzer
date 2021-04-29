@@ -67,7 +67,7 @@ impl BootstrapState {
     ) {
         let stalled_peers = self.peers
             .values()
-            .filter_map(|PeerBootstrapState {empty_bootstrap_state, peer_id, peer_queues, ..}| {
+            .filter_map(|PeerBootstrapState { empty_bootstrap_state, peer_id, peer_queues, .. }| {
                 let mut is_stalled = None;
                 if let Some(empty_bootstrap_state) = empty_bootstrap_state.as_ref() {
                     // 1. check empty bootstrap branches
@@ -126,7 +126,7 @@ impl BootstrapState {
     pub fn block_apply_failed(&mut self, failed_block: &BlockHash, log: &Logger) {
         self.peers
             .values_mut()
-            .for_each(|PeerBootstrapState {branches, peer_id, empty_bootstrap_state, ..}| {
+            .for_each(|PeerBootstrapState { branches, peer_id, empty_bootstrap_state, .. }| {
                 branches
                     .retain(|branch| {
                         if branch.contains_block(&failed_block) {
@@ -146,18 +146,37 @@ impl BootstrapState {
             });
     }
 
-    pub fn blocks_stats(&self) -> (usize, (usize, usize, usize, usize)) {
+    pub fn blocks_stats(&self) -> (usize, (usize, usize, usize, usize, usize, usize)) {
         (
             self.block_state_db.blocks.len(),
             self.block_state_db.blocks.iter().fold(
-                (0, 0, 0, 0),
-                |(block_downloaded, operations_downloaded, applied, scheduled_for_apply),
+                (0, 0, 0, 0, 0, 0),
+                |(
+                    block_downloaded,
+                    operations_downloaded,
+                    applied,
+                    scheduled_for_apply,
+                    scheduled_for_block_header_download,
+                    scheduled_for_block_operations_download,
+                ),
                  (_, state)| {
                     (
                         block_downloaded + (if state.block_downloaded { 1 } else { 0 }),
                         operations_downloaded + (if state.operations_downloaded { 1 } else { 0 }),
                         applied + (if state.applied { 1 } else { 0 }),
                         scheduled_for_apply + (if state.scheduled_for_apply { 1 } else { 0 }),
+                        scheduled_for_block_header_download
+                            + (if state.block_header_requested.is_some() {
+                                1
+                            } else {
+                                0
+                            }),
+                        scheduled_for_block_operations_download
+                            + (if state.block_operations_requested.is_some() {
+                                1
+                            } else {
+                                0
+                            }),
                     )
                 },
             ),
@@ -274,7 +293,7 @@ impl BootstrapState {
         &mut self,
         filter_peer: &Option<Arc<PeerId>>,
         requester: &DataRequester,
-        max_bootstrap_interval_look_ahead_count: u8,
+        cfg: &PeerBranchBootstrapperConfiguration,
         log: &Logger,
     ) {
         let BootstrapState {
@@ -316,7 +335,7 @@ impl BootstrapState {
                 }
                 branch.collect_next_blocks_to_download(
                     available_queue_capacity,
-                    max_bootstrap_interval_look_ahead_count,
+                    cfg,
                     &already_queued,
                     &mut missing_blocks,
                     block_state_db,
@@ -327,7 +346,14 @@ impl BootstrapState {
             }
 
             // try schedule
-            if let Err(e) = requester.fetch_block_headers(missing_blocks, peer_id, peer_queues) {
+            if let Err(e) = requester.fetch_block_headers(
+                missing_blocks,
+                peer_id,
+                peer_queues,
+                |scheduled_block| {
+                    block_state_db.mark_scheduled_for_block_header_download(scheduled_block)
+                },
+            ) {
                 warn!(log, "Failed to schedule block headers for download from peer"; "reason" => e,
                         "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
             }
@@ -338,7 +364,7 @@ impl BootstrapState {
         &mut self,
         filter_peer: &Option<Arc<PeerId>>,
         requester: &DataRequester,
-        max_bootstrap_interval_look_ahead_count: u8,
+        cfg: &PeerBranchBootstrapperConfiguration,
         log: &Logger,
     ) {
         let BootstrapState {
@@ -380,7 +406,7 @@ impl BootstrapState {
                 }
                 branch.collect_next_block_operations_to_download(
                     available_queue_capacity,
-                    max_bootstrap_interval_look_ahead_count,
+                    cfg,
                     &already_queued,
                     &mut missing_blocks,
                     block_state_db,
@@ -391,7 +417,14 @@ impl BootstrapState {
             }
 
             // try schedule
-            if let Err(e) = requester.fetch_block_operations(missing_blocks, peer_id, peer_queues) {
+            if let Err(e) = requester.fetch_block_operations(
+                missing_blocks,
+                peer_id,
+                peer_queues,
+                |scheduled_block| {
+                    block_state_db.mark_scheduled_for_block_operations_download(scheduled_block)
+                },
+            ) {
                 warn!(log, "Failed to schedule block operations for download from peer"; "reason" => e,
                         "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
             }
@@ -595,7 +628,7 @@ impl BranchState {
     pub fn collect_next_blocks_to_download(
         &mut self,
         requested_count: usize,
-        max_bootstrap_interval_look_ahead_count: u8,
+        cfg: &PeerBranchBootstrapperConfiguration,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
         block_state_db: &BlockStateDb,
@@ -617,6 +650,7 @@ impl BranchState {
             // let walk throught interval and resolve first missing block
             interval.collect_first_missing_block(
                 requested_count,
+                cfg,
                 ignored_blocks,
                 blocks_to_download,
                 block_state_db,
@@ -624,7 +658,7 @@ impl BranchState {
 
             // check if we have enought
             if blocks_to_download.len() >= requested_count
-                || max_bootstrap_interval_look_ahead_count <= intervals_checked
+                || cfg.max_bootstrap_interval_look_ahead_count <= intervals_checked
             {
                 break;
             }
@@ -635,7 +669,7 @@ impl BranchState {
     pub fn collect_next_block_operations_to_download(
         &mut self,
         requested_count: usize,
-        max_bootstrap_interval_look_ahead_count: u8,
+        cfg: &PeerBranchBootstrapperConfiguration,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
         block_state_db: &BlockStateDb,
@@ -657,13 +691,14 @@ impl BranchState {
             // let walk throught interval and resolve missing block from this interval
             interval.collect_block_with_missing_operations(
                 requested_count,
+                cfg,
                 &ignored_blocks,
                 blocks_to_download,
                 block_state_db,
             );
 
             if blocks_to_download.len() >= requested_count
-                || max_bootstrap_interval_look_ahead_count <= intervals_checked
+                || cfg.max_bootstrap_interval_look_ahead_count <= intervals_checked
             {
                 return;
             }
@@ -963,6 +998,7 @@ impl BranchInterval {
     fn collect_first_missing_block(
         &mut self,
         requested_count: usize,
+        cfg: &PeerBranchBootstrapperConfiguration,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
         block_state_db: &BlockStateDb,
@@ -982,7 +1018,7 @@ impl BranchInterval {
 
             // check downloaded state
             if let Some(state) = block_state_db.blocks.get(b) {
-                if state.block_downloaded {
+                if !state.can_schedule_header_download(cfg) {
                     continue;
                 }
             }
@@ -1109,6 +1145,7 @@ impl BranchInterval {
     pub(crate) fn collect_block_with_missing_operations(
         &mut self,
         requested_count: usize,
+        cfg: &PeerBranchBootstrapperConfiguration,
         ignored_blocks: &HashSet<Arc<BlockHash>>,
         blocks_to_download: &mut Vec<Arc<BlockHash>>,
         block_state_db: &BlockStateDb,
@@ -1126,7 +1163,7 @@ impl BranchInterval {
             // check downloaded state
             match block_state_db.blocks.get(b) {
                 Some(state) => {
-                    if state.operations_downloaded {
+                    if !state.can_schedule_operations_download(cfg) {
                         continue;
                     }
                 }
@@ -1161,6 +1198,10 @@ pub struct BlockState {
     operations_downloaded: bool,
     applied: bool,
     scheduled_for_apply: bool,
+
+    /// handling uniqness requests
+    block_header_requested: Option<Instant>,
+    block_operations_requested: Option<Instant>,
 }
 
 impl BlockState {
@@ -1171,6 +1212,8 @@ impl BlockState {
             operations_downloaded: false,
             applied: false,
             scheduled_for_apply: false,
+            block_header_requested: None,
+            block_operations_requested: None,
         }
     }
 
@@ -1181,6 +1224,8 @@ impl BlockState {
             operations_downloaded: true,
             applied: true,
             scheduled_for_apply: false,
+            block_header_requested: None,
+            block_operations_requested: None,
         }
     }
 
@@ -1189,6 +1234,7 @@ impl BlockState {
             if !self.block_downloaded {
                 self.block_downloaded = true;
             }
+            self.block_header_requested = None;
         }
 
         if new_state.applied {
@@ -1201,6 +1247,7 @@ impl BlockState {
             if !self.operations_downloaded {
                 self.operations_downloaded = true;
             }
+            self.block_operations_requested = None;
         }
     }
 
@@ -1208,6 +1255,34 @@ impl BlockState {
         if self.predecessor_block_hash.is_none() {
             self.predecessor_block_hash = Some(predecessor);
         }
+    }
+
+    fn can_schedule_header_download(&self, cfg: &PeerBranchBootstrapperConfiguration) -> bool {
+        if self.block_downloaded {
+            return false;
+        }
+
+        if let Some(last_request) = self.block_header_requested.as_ref() {
+            if last_request.elapsed() < cfg.block_data_reschedule_timeout {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn can_schedule_operations_download(&self, cfg: &PeerBranchBootstrapperConfiguration) -> bool {
+        if self.operations_downloaded {
+            return false;
+        }
+
+        if let Some(last_request) = self.block_operations_requested.as_ref() {
+            if last_request.elapsed() < cfg.block_data_reschedule_timeout {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -1233,17 +1308,15 @@ pub struct BlockStateDb {
 }
 
 impl BlockStateDb {
-    pub fn insert_if_missing(&mut self, blocks: &[BlockRef], init_state: fn() -> BlockState) {
-        for b in blocks {
-            let _ = self.blocks.entry(b.clone()).or_insert_with(init_state);
-        }
-    }
-}
-
-impl BlockStateDb {
     fn new(initial_capacity: usize) -> Self {
         Self {
             blocks: HashMap::with_capacity(initial_capacity),
+        }
+    }
+
+    pub fn insert_if_missing(&mut self, blocks: &[BlockRef], init_state: fn() -> BlockState) {
+        for b in blocks {
+            let _ = self.blocks.entry(b.clone()).or_insert_with(init_state);
         }
     }
 
@@ -1291,10 +1364,23 @@ impl BlockStateDb {
         })
     }
 
+    pub fn mark_scheduled_for_block_header_download(&mut self, block_hash: &BlockHash) {
+        if let Some(state) = self.blocks.get_mut(block_hash) {
+            state.block_header_requested = Some(Instant::now());
+        }
+    }
+
+    pub fn mark_scheduled_for_block_operations_download(&mut self, block_hash: &BlockHash) {
+        if let Some(state) = self.blocks.get_mut(block_hash) {
+            state.block_operations_requested = Some(Instant::now());
+        }
+    }
+
     pub fn mark_block_operations_downloaded(&mut self, block_hash: &BlockHash) {
         // mark batch start
         if let Some(block_state) = self.blocks.get_mut(block_hash) {
             block_state.operations_downloaded = true;
+            block_state.block_operations_requested = None;
         }
     }
 
@@ -1323,6 +1409,8 @@ impl BlockStateDb {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use serial_test::serial;
 
     use networking::p2p::network_channel::NetworkChannel;
@@ -1700,7 +1788,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_blocks_to_download(
             1,
-            1,
+            &cfg_max_interval_ahead(1),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -1725,7 +1813,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_blocks_to_download(
             1,
-            1,
+            &cfg_max_interval_ahead(1),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -1755,7 +1843,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_blocks_to_download(
             3,
-            2,
+            &cfg_max_interval_ahead(2),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -2082,7 +2170,7 @@ mod tests {
         let mut blocks_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             5,
-            7,
+            &cfg_max_interval_ahead(7),
             &HashSet::default(),
             &mut blocks_to_download,
             &block_state_db,
@@ -2098,7 +2186,7 @@ mod tests {
         let mut blocks_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             2,
-            7,
+            &cfg_max_interval_ahead(7),
             &HashSet::default(),
             &mut blocks_to_download,
             &block_state_db,
@@ -2111,7 +2199,7 @@ mod tests {
         let mut blocks_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             2,
-            7,
+            &cfg_max_interval_ahead(7),
             &hash_set![block(5)],
             &mut blocks_to_download,
             &block_state_db,
@@ -2179,7 +2267,7 @@ mod tests {
         let mut blocks_to_download1 = Vec::new();
         pipeline1.collect_next_blocks_to_download(
             15,
-            10,
+            &cfg_max_interval_ahead(10),
             &HashSet::default(),
             &mut blocks_to_download1,
             &block_state_db,
@@ -2307,7 +2395,7 @@ mod tests {
         let mut blocks_to_download2 = Vec::new();
         pipeline2.collect_next_blocks_to_download(
             15,
-            10,
+            &cfg_max_interval_ahead(10),
             &HashSet::default(),
             &mut blocks_to_download2,
             &block_state_db,
@@ -2593,6 +2681,7 @@ mod tests {
         let mut missing_blocks = Vec::new();
         pipeline.intervals[0].collect_block_with_missing_operations(
             2,
+            &cfg_max_interval_ahead(100),
             &HashSet::default(),
             &mut missing_blocks,
             &block_state_db,
@@ -2606,6 +2695,7 @@ mod tests {
         let mut missing_blocks = Vec::new();
         pipeline.intervals[1].collect_block_with_missing_operations(
             2,
+            &cfg_max_interval_ahead(100),
             &hash_set![block(2)],
             &mut missing_blocks,
             &block_state_db,
@@ -2618,6 +2708,7 @@ mod tests {
         let mut missing_blocks = Vec::new();
         pipeline.intervals[2].collect_block_with_missing_operations(
             2,
+            &cfg_max_interval_ahead(100),
             &hash_set![block(1)],
             &mut missing_blocks,
             &block_state_db,
@@ -2668,7 +2759,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_block_operations_to_download(
             1,
-            5,
+            &cfg_max_interval_ahead(5),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -2680,7 +2771,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_block_operations_to_download(
             4,
-            7,
+            &cfg_max_interval_ahead(7),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -2695,7 +2786,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_block_operations_to_download(
             4,
-            7,
+            &cfg_max_interval_ahead(7),
             &hash_set![block(5), block(10)],
             &mut result,
             &block_state_db,
@@ -2988,6 +3079,144 @@ mod tests {
         assert_eq!(next_batch.successors[6].as_ref(), block(8).as_ref());
     }
 
+    #[test]
+    fn test_mark_block_scheduled() {
+        // genesis
+        let last_applied = block(0);
+        // history blocks
+        let history: Vec<Arc<BlockHash>> = vec![
+            block(2),
+            block(5),
+            block(8),
+            block(10),
+            block(13),
+            block(15),
+            block(20),
+        ];
+
+        // create
+        let mut block_state_db = BlockStateDb::new(50);
+        block_state_db.insert_if_missing(&[last_applied.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history, || BlockState::new());
+
+        let mut pipeline = BranchState::new(last_applied, history, Arc::new(20));
+        assert_eq!(pipeline.intervals.len(), 7);
+        assert_interval(&pipeline.intervals[0], (block(0), block(2)));
+        assert_interval(&pipeline.intervals[1], (block(2), block(5)));
+        assert_interval(&pipeline.intervals[2], (block(5), block(8)));
+        assert_interval(&pipeline.intervals[3], (block(8), block(10)));
+        assert_interval(&pipeline.intervals[4], (block(10), block(13)));
+        assert_interval(&pipeline.intervals[5], (block(13), block(15)));
+        assert_interval(&pipeline.intervals[6], (block(15), block(20)));
+
+        let mut headers_to_download = Vec::new();
+        pipeline.collect_next_blocks_to_download(
+            1,
+            &cfg_max_interval_ahead(1),
+            &HashSet::default(),
+            &mut headers_to_download,
+            &block_state_db,
+        );
+        assert_eq!(1, headers_to_download.len());
+        assert_eq!(headers_to_download[0].as_ref(), block(2).as_ref());
+
+        block_state_db.mark_scheduled_for_block_header_download(&block(2));
+
+        // cfg with reschedule timeout 1000 ms
+        let mut cfg = cfg_max_interval_ahead(1);
+        cfg.block_data_reschedule_timeout = Duration::from_millis(1000);
+
+        let mut headers_to_download = Vec::new();
+        pipeline.collect_next_blocks_to_download(
+            1,
+            &cfg_max_interval_ahead(1),
+            &HashSet::default(),
+            &mut headers_to_download,
+            &block_state_db,
+        );
+        assert_eq!(0, headers_to_download.len());
+
+        // sleep a little bit
+        std::thread::sleep(Duration::from_millis(100));
+
+        // try with changed timeout
+        cfg.block_data_reschedule_timeout = Duration::from_millis(10);
+
+        let mut headers_to_download = Vec::new();
+        pipeline.collect_next_blocks_to_download(
+            1,
+            &cfg,
+            &HashSet::default(),
+            &mut headers_to_download,
+            &block_state_db,
+        );
+        assert_eq!(1, headers_to_download.len());
+        assert_eq!(headers_to_download[0].as_ref(), block(2).as_ref());
+
+        // block downloaded removes timeout
+        assert!(block_state_db
+            .blocks
+            .get(&block(2))
+            .unwrap()
+            .block_header_requested
+            .is_some());
+        block_state_db.update_block(
+            &block(2),
+            block(2).as_ref().clone(),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: false,
+                applied: false,
+            },
+        );
+        assert!(block_state_db
+            .blocks
+            .get(&block(2))
+            .unwrap()
+            .block_header_requested
+            .is_none());
+
+        // operations
+        cfg.block_data_reschedule_timeout = Duration::from_millis(1000);
+        block_state_db.mark_scheduled_for_block_operations_download(&block(2));
+
+        let mut headers_to_download = Vec::new();
+        pipeline.collect_next_block_operations_to_download(
+            1,
+            &cfg,
+            &HashSet::default(),
+            &mut headers_to_download,
+            &block_state_db,
+        );
+        assert_eq!(0, headers_to_download.len());
+
+        // sleep a little bit
+        std::thread::sleep(Duration::from_millis(100));
+
+        // try with changed timeout
+        cfg.block_data_reschedule_timeout = Duration::from_millis(10);
+
+        let mut headers_to_download = Vec::new();
+        pipeline.collect_next_block_operations_to_download(
+            1,
+            &cfg,
+            &HashSet::default(),
+            &mut headers_to_download,
+            &block_state_db,
+        );
+        assert_eq!(1, headers_to_download.len());
+        assert_eq!(headers_to_download[0].as_ref(), block(2).as_ref());
+
+        // block operations downloaded removes timeout
+        block_state_db.mark_block_operations_downloaded(&block(2));
+        assert!(block_state_db
+            .blocks
+            .get(&block(2))
+            .unwrap()
+            .block_operations_requested
+            .is_none());
+    }
+
     fn assert_interval(
         tested: &BranchInterval,
         (expected_left, expected_right): (Arc<BlockHash>, Arc<BlockHash>),
@@ -2995,5 +3224,17 @@ mod tests {
         assert_eq!(tested.blocks.len(), 2);
         assert_eq!(tested.blocks[0].as_ref(), expected_left.as_ref());
         assert_eq!(tested.blocks[1].as_ref(), expected_right.as_ref());
+    }
+
+    fn cfg_max_interval_ahead(max_interval_ahead: u8) -> PeerBranchBootstrapperConfiguration {
+        PeerBranchBootstrapperConfiguration::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            max_interval_ahead,
+            1,
+            100,
+        )
     }
 }
