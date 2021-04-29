@@ -61,11 +61,12 @@ impl DataRequester {
     /// Tries to schedule blocks downloading from peer
     ///
     /// Returns true if was scheduled and p2p message was sent
-    pub fn fetch_block_headers(
+    pub fn fetch_block_headers<SC: FnMut(&BlockHash)>(
         &self,
         mut blocks_to_download: Vec<Arc<BlockHash>>,
         peer: &PeerId,
         peer_queues: &DataQueues,
+        mut on_block_schedule: SC,
     ) -> Result<bool, StateError> {
         // check if empty
         if blocks_to_download.is_empty() {
@@ -109,6 +110,8 @@ impl DataRequester {
             blocks_to_download
                 .chunks(limits::GET_BLOCK_HEADERS_MAX_LENGTH)
                 .for_each(|blocks_to_download| {
+                    blocks_to_download.iter().for_each(|b| on_block_schedule(b));
+
                     tell_peer(
                         GetBlockHeadersMessage::new(
                             blocks_to_download
@@ -121,6 +124,8 @@ impl DataRequester {
                     );
                 });
         } else {
+            blocks_to_download.iter().for_each(|b| on_block_schedule(b));
+
             tell_peer(
                 GetBlockHeadersMessage::new(
                     blocks_to_download
@@ -139,11 +144,12 @@ impl DataRequester {
     /// Tries to schedule blocks operations downloading from peer
     ///
     /// Returns true if was scheduled and p2p message was sent
-    pub fn fetch_block_operations(
+    pub fn fetch_block_operations<SC: FnMut(&BlockHash)>(
         &self,
         mut blocks_to_download: Vec<Arc<BlockHash>>,
         peer: &PeerId,
         peer_queues: &DataQueues,
+        mut on_block_schedule: SC,
     ) -> Result<bool, StateError> {
         // check if empty
         if blocks_to_download.is_empty() {
@@ -220,12 +226,20 @@ impl DataRequester {
             blocks_to_download
                 .chunks(limits::GET_OPERATIONS_FOR_BLOCKS_MAX_LENGTH)
                 .for_each(|blocks_to_download| {
+                    blocks_to_download
+                        .iter()
+                        .for_each(|b| on_block_schedule(b.block_hash()));
+
                     tell_peer(
                         GetOperationsForBlocksMessage::new(blocks_to_download.into()).into(),
                         peer,
                     );
                 });
         } else {
+            blocks_to_download
+                .iter()
+                .for_each(|(b, _)| on_block_schedule(b));
+
             tell_peer(
                 GetOperationsForBlocksMessage::new(
                     blocks_to_download
@@ -566,14 +580,19 @@ mod tests {
 
         // try schedule nothiing
         assert!(matches!(
-            data_requester.fetch_block_headers(vec![], &peer1.peer_id, &peer1.queues),
+            data_requester.fetch_block_headers(vec![], &peer1.peer_id, &peer1.queues, |_| ()),
             Ok(false)
         ));
 
         // try schedule block1
         let block1 = block(1);
         assert!(matches!(
-            data_requester.fetch_block_headers(vec![block1.clone()], &peer1.peer_id, &peer1.queues),
+            data_requester.fetch_block_headers(
+                vec![block1.clone()],
+                &peer1.peer_id,
+                &peer1.queues,
+                |_| ()
+            ),
             Ok(true)
         ));
 
@@ -582,7 +601,12 @@ mod tests {
 
         // try schedule block1 once more
         assert!(matches!(
-            data_requester.fetch_block_headers(vec![block1.clone()], &peer1.peer_id, &peer1.queues),
+            data_requester.fetch_block_headers(
+                vec![block1.clone()],
+                &peer1.peer_id,
+                &peer1.queues,
+                |_| ()
+            ),
             Ok(false)
         ));
 
@@ -595,7 +619,12 @@ mod tests {
 
         // try schedule block1 once more while holding the lock (should not succeed, because block1 was not removed from queues, becuase we still hold the lock)
         assert!(matches!(
-            data_requester.fetch_block_headers(vec![block1.clone()], &peer1.peer_id, &peer1.queues),
+            data_requester.fetch_block_headers(
+                vec![block1.clone()],
+                &peer1.peer_id,
+                &peer1.queues,
+                |_| ()
+            ),
             Ok(false)
         ));
 
@@ -607,7 +636,7 @@ mod tests {
 
         // we can reschedule it once more now
         assert!(matches!(
-            data_requester.fetch_block_headers(vec![block1], &peer1.peer_id, &peer1.queues),
+            data_requester.fetch_block_headers(vec![block1], &peer1.peer_id, &peer1.queues, |_| ()),
             Ok(true)
         ));
 
@@ -642,7 +671,7 @@ mod tests {
 
         // try schedule nothiing
         assert!(matches!(
-            data_requester.fetch_block_operations(vec![], &peer1.peer_id, &peer1.queues),
+            data_requester.fetch_block_operations(vec![], &peer1.peer_id, &peer1.queues, |_| ()),
             Ok(false)
         ));
 
@@ -651,7 +680,8 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues
+                &peer1.queues,
+                |_| ()
             ),
             Ok(true)
         ));
@@ -664,7 +694,8 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues
+                &peer1.queues,
+                |_| ()
             ),
             Ok(false)
         ));
@@ -685,7 +716,8 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues
+                &peer1.queues,
+                |_| ()
             ),
             Ok(false)
         ));
@@ -701,7 +733,8 @@ mod tests {
             data_requester.fetch_block_operations(
                 vec![block1.clone()],
                 &peer1.peer_id,
-                &peer1.queues
+                &peer1.queues,
+                |_| ()
             ),
             Ok(false)
         ));
@@ -736,7 +769,12 @@ mod tests {
 
         // we can reschedule it once more now
         assert!(matches!(
-            data_requester.fetch_block_operations(vec![block1], &peer1.peer_id, &peer1.queues),
+            data_requester.fetch_block_operations(
+                vec![block1],
+                &peer1.peer_id,
+                &peer1.queues,
+                |_| ()
+            ),
             Ok(true)
         ));
 
