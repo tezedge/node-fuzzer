@@ -451,19 +451,20 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
         ) = self.bootstrap_state.block_intervals_stats();
 
         info!(ctx.system.log(), "Peer branch bootstrapper processing info";
-                   "peers_count" => self.bootstrap_state.peers_count(),
                    "actor_received_messages_count" => self.get_and_clear_actor_received_messages_count(),
-                   "processing_peer_branches" => processing_peer_branches,
-                   "processing_block_intervals" => processing_block_intervals,
-                   "processing_block_intervals_downloaded" => processing_block_intervals_downloaded,
-                   "processing_block_intervals_operations_downloaded" => processing_block_intervals_operations_downloaded,
-                   "processing_blocks" => processing_blocks,
-                   "processing_blocks_downloaded" => processing_blocks_downloaded,
-                   "processing_blocks_operations_downloaded" => processing_blocks_operations_downloaded,
-                   "processing_blocks_applied" => processing_blocks_applied,
-                   "processing_blocks_scheduled_for_apply" => processing_blocks_scheduled_for_apply,
-                   "processing_blocks_scheduled_for_block_header_download" => processing_blocks_scheduled_for_block_header_download,
-                   "processing_blocks_scheduled_for_block_operations_download" => processing_blocks_scheduled_for_block_operations_download,
+                   "peers_count" => self.bootstrap_state.peers_count(),
+                   "peers_branches" => processing_peer_branches,
+                   "block_intervals" => processing_block_intervals,
+                   "block_intervals_downloaded" => processing_block_intervals_downloaded,
+                   "block_intervals_operations_downloaded" => processing_block_intervals_operations_downloaded,
+                   "block_intervals_next_lowest_missing_blocks" => self.bootstrap_state.next_lowest_missing_blocks().iter().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(","),
+                   "blocks" => processing_blocks,
+                   "blocks_downloaded" => processing_blocks_downloaded,
+                   "blocks_operations_downloaded" => processing_blocks_operations_downloaded,
+                   "blocks_applied" => processing_blocks_applied,
+                   "blocks_scheduled_for_apply" => processing_blocks_scheduled_for_apply,
+                   "blocks_scheduled_for_block_header_download" => processing_blocks_scheduled_for_block_header_download,
+                   "blocks_scheduled_for_block_operations_download" => processing_blocks_scheduled_for_block_operations_download,
         );
     }
 }
