@@ -272,6 +272,7 @@ impl BootstrapState {
 
     pub fn schedule_blocks_to_download(
         &mut self,
+        filter_peer: &Option<Arc<PeerId>>,
         requester: &DataRequester,
         max_bootstrap_interval_look_ahead_count: u8,
         log: &Logger,
@@ -288,6 +289,13 @@ impl BootstrapState {
             ..
         } in peers.values_mut()
         {
+            // filter by peer
+            if let Some(filter_peer) = filter_peer.as_ref() {
+                if !filter_peer.peer_ref.eq(&peer_id.peer_ref) {
+                    continue;
+                }
+            }
+
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
                 .get_already_queued_block_headers_and_max_capacity()
@@ -328,6 +336,7 @@ impl BootstrapState {
 
     pub fn schedule_operations_to_download(
         &mut self,
+        filter_peer: &Option<Arc<PeerId>>,
         requester: &DataRequester,
         max_bootstrap_interval_look_ahead_count: u8,
         log: &Logger,
@@ -344,6 +353,13 @@ impl BootstrapState {
             ..
         } in peers.values_mut()
         {
+            // filter by peer
+            if let Some(filter_peer) = filter_peer.as_ref() {
+                if !filter_peer.peer_ref.eq(&peer_id.peer_ref) {
+                    continue;
+                }
+            }
+
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
                 .get_already_queued_block_operations_and_max_capacity()
