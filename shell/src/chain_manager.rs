@@ -1520,7 +1520,7 @@ impl Receive<LogStats> for ChainManager {
             "peer_count" => self.peers.len());
         // TODO: TE-369 - peers stats
         for peer in self.peers.values() {
-            debug!(log, "Peer state info";
+            info!(log, "Peer state info";
                 "actor_ref" => format!("{}", peer.peer_id.peer_ref),
                 "current_head_request_secs" => peer.current_head_request_last.elapsed().as_secs(),
                 "current_head_response_secs" => peer.current_head_response_last.elapsed().as_secs(),
@@ -1532,8 +1532,8 @@ impl Receive<LogStats> for ChainManager {
                                 .map(|(_, requested_time)| requested_time)
                                 .minmax_by(|left_requested_time, right_requested_time| left_requested_time.cmp(right_requested_time)) {
                                 MinMaxResult::NoElements => "-empty-".to_string(),
-                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}, {:?}", x.elapsed(), queued_block_headers.keys().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(", ")),
-                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?}, {:?})", queued_block_headers.len(), x.elapsed(), y.elapsed(), queued_block_headers.keys().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(", "))
+                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}, {:?})", x.elapsed(), queued_block_headers.iter().map(|(b, requested_time)| format!("{} ({:?})", b.to_base58_check(), requested_time.elapsed())).collect::<Vec<_>>().join(", ")),
+                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?}, {:?})", queued_block_headers.len(), x.elapsed(), y.elapsed(), queued_block_headers.iter().map(|(b, requested_time)| format!("{} ({:?})", b.to_base58_check(), requested_time.elapsed())).collect::<Vec<_>>().join(", "))
                             }
                         },
                         _ =>  "-failed-to-collect-".to_string()
@@ -1547,8 +1547,8 @@ impl Receive<LogStats> for ChainManager {
                                 .map(|(_, (_, requested_time))| requested_time)
                                 .minmax_by(|left_requested_time, right_requested_time| left_requested_time.cmp(right_requested_time)) {
                                 MinMaxResult::NoElements => "-empty-".to_string(),
-                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}", x.elapsed()),
-                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?})", queued_block_operations.len(), x.elapsed(), y.elapsed())
+                                MinMaxResult::OneElement(x) => format!("(1 item, requested_time: {:?}, {:?})", x.elapsed(), queued_block_operations.iter().map(|(b, (_, requested_time))| format!("{} ({:?})", b.to_base58_check(), requested_time.elapsed())).collect::<Vec<_>>().join(", ")),
+                                MinMaxResult::MinMax(x, y) => format!("({} items, oldest_request_elapsed_time: {:?}, last_request_elapsed_time: {:?}, {:?})", queued_block_operations.len(), x.elapsed(), y.elapsed(), queued_block_operations.iter().map(|(b, (_, requested_time))| format!("{} ({:?})", b.to_base58_check(), requested_time.elapsed())).collect::<Vec<_>>().join(", "))
                             }
                         },
                         _ =>  "-failed-to-collect-".to_string()
