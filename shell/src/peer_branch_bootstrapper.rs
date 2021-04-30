@@ -457,7 +457,7 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
                    "block_intervals" => processing_block_intervals,
                    "block_intervals_downloaded" => processing_block_intervals_downloaded,
                    "block_intervals_operations_downloaded" => processing_block_intervals_operations_downloaded,
-                   "block_intervals_next_lowest_missing_blocks" => self.bootstrap_state.next_lowest_missing_blocks().iter().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(","),
+                   "block_intervals_next_lowest_missing_blocks" => self.bootstrap_state.next_lowest_missing_blocks().iter().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(", "),
                    "blocks" => processing_blocks,
                    "blocks_downloaded" => processing_blocks_downloaded,
                    "blocks_operations_downloaded" => processing_blocks_operations_downloaded,
