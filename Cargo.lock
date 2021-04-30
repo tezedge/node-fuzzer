@@ -2217,7 +2217,6 @@ dependencies = [
  "failure",
  "futures",
  "hex",
- "rand 0.7.3",
  "riker",
  "slog",
  "slog-async",
