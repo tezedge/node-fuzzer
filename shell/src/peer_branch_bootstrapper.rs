@@ -489,11 +489,11 @@ impl Receive<UpdateBlockState> for PeerBranchBootstrapper {
         self.bootstrap_state
             .block_downloaded(block_hash, predecessor_block_hash, new_state);
 
-        // process bootstrap
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(peer_id));
-
         // explicit drop (not needed)
         drop(data_lock);
+
+        // process bootstrap
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(peer_id));
     }
 }
 
@@ -510,11 +510,11 @@ impl Receive<UpdateOperationsState> for PeerBranchBootstrapper {
         self.bootstrap_state
             .block_operations_downloaded(msg.block_hash);
 
-        // process
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(msg.peer_id));
-
         // explicit drop (not needed)
         drop(msg.data_lock);
+
+        // process
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(msg.peer_id));
     }
 }
 

@@ -1284,7 +1284,7 @@ impl BlockState {
     }
 
     fn can_schedule_header_download(&self, cfg: &PeerBranchBootstrapperConfiguration) -> bool {
-        if self.block_downloaded {
+        if self.block_downloaded || self.applied {
             return false;
         }
 
@@ -1298,7 +1298,7 @@ impl BlockState {
     }
 
     fn can_schedule_operations_download(&self, cfg: &PeerBranchBootstrapperConfiguration) -> bool {
-        if self.operations_downloaded {
+        if self.operations_downloaded || self.applied {
             return false;
         }
 
