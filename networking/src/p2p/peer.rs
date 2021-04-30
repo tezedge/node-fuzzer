@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use failure::{Error, Fail};
 use futures::lock::Mutex;
-use rand::Rng;
 use riker::actors::*;
 use slog::{debug, info, o, trace, warn, Logger};
 use tokio::io::AsyncWriteExt;
@@ -319,12 +318,6 @@ impl Receive<SendMessage> for Peer {
         let peer_id_marker = self.peer_id_marker.clone();
 
 
-        // TODO: TE-514 - simple delayer, should work as tezos quota limiter
-        let mut rnd = rand::thread_rng();
-        let delay: i32 = rnd.gen_range(0, 50);
-        if delay > 0 {
-            std::thread::sleep(Duration::from_millis(delay as u64));
-        }
 
         self.tokio_executor.spawn(async move {
             let mut tx_lock = tx.lock().await;
