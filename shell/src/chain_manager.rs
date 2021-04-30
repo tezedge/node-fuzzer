@@ -65,15 +65,18 @@ use crate::validation;
 const ASK_CURRENT_HEAD_INTERVAL: Duration = Duration::from_secs(90);
 /// Initial delay to ask the peers for current head
 const ASK_CURRENT_HEAD_INITIAL_DELAY: Duration = Duration::from_secs(15);
-/// How often to print stats in logs
-const LOG_INTERVAL: Duration = Duration::from_secs(60);
-
 /// After this time we will disconnect peer if his current head level stays the same
 const CURRENT_HEAD_LEVEL_UPDATE_TIMEOUT: Duration = Duration::from_secs(60 * 2);
+/// We accept current_head not older that this timeout
+const CURRENT_HEAD_LAST_RECEIVED_ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// After this time peer will be disconnected if it fails to respond to our request
 const SILENT_PEER_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum timeout duration in sandbox mode (do not disconnect peers in sandbox mode)
 const SILENT_PEER_TIMEOUT_SANDBOX: Duration = Duration::from_secs(31_536_000);
+
+/// How often to print stats in logs
+const LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Message commands [`ChainManager`] to disconnect stalled peers.
 #[derive(Clone, Debug)]
@@ -87,7 +90,9 @@ pub struct CheckMempoolCompleteness;
 
 /// Message commands [`ChainManager`] to ask all connected peers for their current head.
 #[derive(Clone, Debug)]
-pub struct AskPeersAboutCurrentHead;
+pub struct AskPeersAboutCurrentHead {
+    last_received_timeout: Duration,
+}
 
 /// Message commands [`ChainManager`] to log its internal stats.
 #[derive(Clone, Debug)]
@@ -1401,7 +1406,10 @@ impl Actor for ChainManager {
             ASK_CURRENT_HEAD_INTERVAL,
             ctx.myself(),
             None,
-            AskPeersAboutCurrentHead.into(),
+            AskPeersAboutCurrentHead {
+                last_received_timeout: CURRENT_HEAD_LAST_RECEIVED_ACCEPT_TIMEOUT,
+            }
+            .into(),
         );
         ctx.schedule::<Self::Msg, _>(
             LOG_INTERVAL / 2,
@@ -1677,18 +1685,19 @@ impl Receive<AskPeersAboutCurrentHead> for ChainManager {
     fn receive(
         &mut self,
         _ctx: &Context<Self::Msg>,
-        _msg: AskPeersAboutCurrentHead,
+        msg: AskPeersAboutCurrentHead,
         _sender: Sender,
     ) {
         let ChainManager {
             peers, chain_state, ..
         } = self;
         peers.iter_mut().for_each(|(_, peer)| {
-            peer.current_head_request_last = Instant::now();
-            tell_peer(
-                GetCurrentHeadMessage::new(chain_state.get_chain_id().as_ref().clone()).into(),
-                peer,
-            )
+            if peer.current_head_response_last.elapsed() > msg.last_received_timeout {
+                tell_peer(
+                    GetCurrentHeadMessage::new(chain_state.get_chain_id().as_ref().clone()).into(),
+                    peer,
+                )
+            }
         })
     }
 }
