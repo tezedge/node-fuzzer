@@ -494,38 +494,13 @@ impl BootstrapState {
         predecessor_block_hash: BlockHash,
         new_state: InnerBlockState,
     ) {
-        let BootstrapState {
-            peers,
-            block_state_db,
-        } = self;
-
-        // update db
-        block_state_db.update_block(&block_hash, predecessor_block_hash, new_state);
-
-        // update pipelines with predecessor
-        peers.values_mut().for_each(|peer_state| {
-            peer_state.branches.iter_mut().for_each(|branch| {
-                branch.block_downloaded(&block_hash, block_state_db);
-            });
-        });
+        self.block_state_db
+            .update_block(&block_hash, predecessor_block_hash, new_state);
     }
 
     pub fn block_operations_downloaded(&mut self, block_hash: BlockHash) {
-        let BootstrapState {
-            peers,
-            block_state_db,
-        } = self;
-
-        // update db
-        block_state_db.mark_block_operations_downloaded(&block_hash);
-
-        // update pipelines
-        peers.values_mut().for_each(|peer_state| {
-            peer_state
-                .branches
-                .iter_mut()
-                .for_each(|branch| branch.block_operations_downloaded(&block_hash, block_state_db));
-        });
+        self.block_state_db
+            .mark_block_operations_downloaded(&block_hash);
     }
 
     pub fn block_applied(&mut self, block_hash: Arc<BlockHash>) {
@@ -3241,6 +3216,96 @@ mod tests {
             .unwrap()
             .block_operations_requested
             .is_none());
+    }
+
+    #[test]
+    fn test_bootstrap_state_schedule_unique_blocks_for_download() {
+        // common shared db
+        let mut block_state_db = BlockStateDb::new(50);
+
+        // genesis
+        let last_applied1 = block(0);
+        let last_applied2 = block(0);
+        // history blocks
+        let history1: Vec<Arc<BlockHash>> = vec![
+            block(2),
+            block(5),
+            block(8),
+            block(10),
+            block(13),
+            block(15),
+            block(20),
+        ];
+        let history2: Vec<Arc<BlockHash>> = vec![
+            block(2),
+            block(5),
+            block(8),
+            block(10),
+            block(13),
+            block(15),
+            block(20),
+        ];
+
+        // create pipeline1
+        block_state_db.insert_if_missing(&[last_applied1.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history1, || BlockState::new());
+        assert_eq!(8, block_state_db.blocks.len());
+
+        let mut pipeline1 = BranchState::new(last_applied1.clone(), history1, Arc::new(20));
+        assert_eq!(pipeline1.intervals.len(), 7);
+        assert_interval(&pipeline1.intervals[0], (block(0), block(2)));
+        assert_interval(&pipeline1.intervals[1], (block(2), block(5)));
+        assert_interval(&pipeline1.intervals[2], (block(5), block(8)));
+        assert_interval(&pipeline1.intervals[3], (block(8), block(10)));
+        assert_interval(&pipeline1.intervals[4], (block(10), block(13)));
+        assert_interval(&pipeline1.intervals[5], (block(13), block(15)));
+        assert_interval(&pipeline1.intervals[6], (block(15), block(20)));
+
+        // create pipeline2
+        block_state_db.insert_if_missing(&[last_applied2.clone()], || BlockState::new_applied());
+        block_state_db.insert_if_missing(&history2, || BlockState::new());
+        assert_eq!(8, block_state_db.blocks.len());
+
+        let mut pipeline2 = BranchState::new(last_applied2.clone(), history2, Arc::new(20));
+        assert_eq!(pipeline2.intervals.len(), 7);
+        assert_interval(&pipeline2.intervals[0], (block(0), block(2)));
+        assert_interval(&pipeline2.intervals[1], (block(2), block(5)));
+        assert_interval(&pipeline2.intervals[2], (block(5), block(8)));
+        assert_interval(&pipeline2.intervals[3], (block(8), block(10)));
+        assert_interval(&pipeline2.intervals[4], (block(10), block(13)));
+        assert_interval(&pipeline2.intervals[5], (block(13), block(15)));
+        assert_interval(&pipeline2.intervals[6], (block(15), block(20)));
+
+        // cfg
+        let mut cfg = cfg_max_interval_ahead(2);
+        cfg.block_data_reschedule_timeout = Duration::from_secs(15);
+
+        // simulate schedulue for pipeline1
+        let mut result1 = Vec::new();
+        pipeline1.collect_next_blocks_to_download(
+            10,
+            &cfg,
+            &HashSet::default(),
+            &mut result1,
+            &block_state_db,
+        );
+        assert_eq!(2, result1.len());
+        assert_eq!(result1[0].as_ref(), block(2).as_ref());
+        assert_eq!(result1[1].as_ref(), block(5).as_ref());
+        result1
+            .iter()
+            .for_each(|b| block_state_db.mark_scheduled_for_block_header_download(&b));
+
+        // simulate schedulue for pipeline2
+        let mut result2 = Vec::new();
+        pipeline2.collect_next_blocks_to_download(
+            10,
+            &cfg,
+            &HashSet::default(),
+            &mut result2,
+            &block_state_db,
+        );
+        assert_eq!(0, result2.len());
     }
 
     fn assert_interval(
