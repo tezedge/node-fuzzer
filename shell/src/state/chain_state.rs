@@ -402,7 +402,7 @@ impl BlockchainState {
 
         // collect for every block if it is applied and get the "last applied" = highest block index
         let mut last_applied_idx: Option<usize> = None;
-        let branch_history_locator_lowest_level_first: Vec<(Arc<BlockHash>, bool)> = history
+        let branch_history_locator_lowest_level_first: Vec<(BlockHash, bool)> = history
             .into_iter()
             .rev()
             .enumerate()
@@ -412,16 +412,16 @@ impl BlockchainState {
                         if metadata.is_applied() {
                             last_applied_idx = Some(idx);
                         }
-                        (Arc::new(history_block_hash), metadata.is_applied())
+                        (history_block_hash, metadata.is_applied())
                     }
-                    _ => (Arc::new(history_block_hash), false),
+                    _ => (history_block_hash, false),
                 }
             })
             .collect();
 
         // prepare bootstrap pipeline for this history according to last known applied block (if None, then use genesis)
         // and we are just interested in history after last applied block
-        let (last_applied_block, missing_history): (Arc<BlockHash>, Vec<Arc<BlockHash>>) =
+        let (last_applied_block, missing_history): (BlockHash, Vec<BlockHash>) =
             match last_applied_idx {
                 Some(last_applied_idx) => {
                     // we split history
@@ -441,7 +441,7 @@ impl BlockchainState {
                     } else {
                         // fall back to start from genesis
                         (
-                            self.chain_genesis_block_hash.clone(),
+                            self.chain_genesis_block_hash.as_ref().clone(),
                             branch_history_locator_lowest_level_first
                                 .into_iter()
                                 .map(|(b, _)| b)
@@ -452,7 +452,7 @@ impl BlockchainState {
                 None => {
                     // fall back to start from genesis
                     (
-                        self.chain_genesis_block_hash.clone(),
+                        self.chain_genesis_block_hash.as_ref().clone(),
                         branch_history_locator_lowest_level_first
                             .into_iter()
                             .map(|(b, _)| b)
@@ -494,7 +494,7 @@ impl BlockchainState {
                         self.chain_id.clone(),
                         last_applied_block,
                         missing_history,
-                        Arc::new(block_header.header.level()),
+                        block_header.header.level(),
                     ),
                     None,
                 );

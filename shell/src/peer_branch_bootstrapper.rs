@@ -48,9 +48,9 @@ pub struct StartBranchBootstraping {
     peer_id: Arc<PeerId>,
     peer_queues: Arc<DataQueues>,
     chain_id: Arc<ChainId>,
-    last_applied_block: Arc<BlockHash>,
-    missing_history: Vec<Arc<BlockHash>>,
-    to_level: Arc<Level>,
+    last_applied_block: BlockHash,
+    missing_history: Vec<BlockHash>,
+    to_level: Level,
 }
 
 impl StartBranchBootstraping {
@@ -58,9 +58,9 @@ impl StartBranchBootstraping {
         peer_id: Arc<PeerId>,
         peer_queues: Arc<DataQueues>,
         chain_id: Arc<ChainId>,
-        last_applied_block: Arc<BlockHash>,
-        missing_history: Vec<Arc<BlockHash>>,
-        to_level: Arc<Level>,
+        last_applied_block: BlockHash,
+        missing_history: Vec<BlockHash>,
+        to_level: Level,
     ) -> Self {
         Self {
             peer_id,
@@ -528,7 +528,7 @@ impl Receive<ApplyBlockBatchDone> for PeerBranchBootstrapper {
         _: Option<BasicActorRef>,
     ) {
         // process message
-        self.bootstrap_state.block_applied(msg.last_applied);
+        self.bootstrap_state.block_applied(&msg.last_applied);
 
         // process
         self.process_bootstrap_pipelines(ctx, &ctx.system.log(), None)

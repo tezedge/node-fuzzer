@@ -503,10 +503,10 @@ mod tests {
     use crate::chain_feeder::{ChainFeeder, ChainFeederRef};
     use crate::shell_channel::ShellChannel;
     use crate::state::data_requester::DataRequester;
-    use crate::state::tests::block;
     use crate::state::tests::prerequisites::{
         create_logger, create_test_actor_system, create_test_tokio_runtime, test_peer,
     };
+    use crate::state::tests::{block, block_ref};
     use crate::state::ApplyBlockBatch;
     use crate::state::StateError;
     use crypto::hash::ChainId;
@@ -585,7 +585,7 @@ mod tests {
         ));
 
         // try schedule block1
-        let block1 = block(1);
+        let block1 = block_ref(1);
         assert!(matches!(
             data_requester.fetch_block_headers(
                 vec![block1.clone()],
@@ -665,7 +665,7 @@ mod tests {
         );
 
         // prepare missing operations in db for block with 4 validation_pass
-        let block1 = block(1);
+        let block1 = block_ref(1);
         OperationsMetaStorage::new(storage.storage())
             .put(&block1, &operations_meta_storage::Meta::new(4))?;
 
@@ -799,7 +799,7 @@ mod tests {
         );
 
         // prepare missing operations in db for block with 4 validation_pass
-        let block1 = block(1);
+        let block1 = block_ref(1);
         let batch_with_block1 = ApplyBlockBatch::batch(block1.clone(), Vec::new());
         let chain_id = Arc::new(ChainId::from_base58_check("NetXgtSLGNJvNye")?);
 
@@ -824,7 +824,7 @@ mod tests {
             &block1,
             &block_meta_storage::Meta::new(
                 false,
-                Some(block0.as_ref().clone()),
+                Some(block0.clone()),
                 1,
                 chain_id.as_ref().clone(),
             ),
@@ -853,12 +853,7 @@ mod tests {
         // try call - is already applied
         block_meta_storage.put(
             &block1,
-            &block_meta_storage::Meta::new(
-                true,
-                Some(block0.as_ref().clone()),
-                1,
-                chain_id.as_ref().clone(),
-            ),
+            &block_meta_storage::Meta::new(true, Some(block0), 1, chain_id.as_ref().clone()),
         )?;
         assert!(matches!(
             data_requester.call_apply_block(
