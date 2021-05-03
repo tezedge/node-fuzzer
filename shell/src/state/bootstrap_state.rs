@@ -880,35 +880,34 @@ impl BranchState {
         requested_block_hash: &BlockHash,
         block_state_db: &BlockStateDb,
     ) {
-        // find first interval with this block
-        let interval_to_handle = self.intervals.iter_mut().enumerate().find(|(_, interval)| {
-            // find first interval with this block
-            interval
-                .blocks
-                .iter()
-                .any(|b| b.as_ref().eq(requested_block_hash))
-        });
-
-        if let Some((interval_idx, interval)) = interval_to_handle {
-            // find block and update metadata
-            let mut block_index_to_remove_before = None;
-            for (block_index, b) in interval.blocks.iter().enumerate() {
-                // we want to remove all blocks before this applied blocks, we dont need them anymore
-                if requested_block_hash.eq(b.as_ref()) {
-                    block_index_to_remove_before = Some(block_index);
+        // find first interval with the applied block block
+        let mut interval_to_handle = None;
+        for (interval_idx, interval) in self.intervals.iter_mut().enumerate() {
+            // find the applied block
+            let mut remove_before_block_idx = None;
+            for (block_idx, block) in interval.blocks.iter().enumerate() {
+                if block.as_ref().eq(requested_block_hash) {
+                    remove_before_block_idx = Some(block_idx);
                     break;
                 }
             }
 
-            if let Some(remove_index) = block_index_to_remove_before {
+            // find block and remove all blocks before
+            // we want to remove all blocks before this applied blocks, we dont need them anymore
+            if let Some(remove_before_index) = remove_before_block_idx {
                 // we dont want to remove the block, just the blocks before, because at least first block must be applied
-                for _ in 0..remove_index {
+                for _ in 0..remove_before_index {
                     if !interval.blocks.is_empty() {
                         let _ = interval.blocks.remove(0);
                     }
                 }
-            }
 
+                interval_to_handle = Some((interval_idx, interval));
+                break;
+            }
+        }
+
+        if let Some((interval_idx, interval)) = interval_to_handle {
             // remove interval if it is empty
             if interval.blocks.len() <= 1 {
                 let all_applied = interval.blocks.iter().all(|b| {
