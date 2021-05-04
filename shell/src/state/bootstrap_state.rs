@@ -313,7 +313,6 @@ impl BootstrapState {
 
     pub fn schedule_blocks_to_download(
         &mut self,
-        filter_peer: &Option<Arc<PeerId>>,
         requester: &DataRequester,
         cfg: &PeerBranchBootstrapperConfiguration,
         log: &Logger,
@@ -330,13 +329,6 @@ impl BootstrapState {
             ..
         } in peers.values_mut()
         {
-            // filter by peer
-            if let Some(filter_peer) = filter_peer.as_ref() {
-                if !filter_peer.peer_ref.eq(&peer_id.peer_ref) {
-                    continue;
-                }
-            }
-
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
                 .get_already_queued_block_headers_and_max_capacity()
@@ -384,7 +376,6 @@ impl BootstrapState {
 
     pub fn schedule_operations_to_download(
         &mut self,
-        filter_peer: &Option<Arc<PeerId>>,
         requester: &DataRequester,
         cfg: &PeerBranchBootstrapperConfiguration,
         log: &Logger,
@@ -401,13 +392,6 @@ impl BootstrapState {
             ..
         } in peers.values_mut()
         {
-            // filter by peer
-            if let Some(filter_peer) = filter_peer.as_ref() {
-                if !filter_peer.peer_ref.eq(&peer_id.peer_ref) {
-                    continue;
-                }
-            }
-
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
                 .get_already_queued_block_operations_and_max_capacity()
@@ -673,7 +657,7 @@ impl BranchState {
 
             // check if we have enought
             if blocks_to_download.len() >= requested_count
-                || cfg.max_bootstrap_interval_look_ahead_count <= intervals_checked
+                || cfg.max_bootstrap_interval_look_ahead_count_for_blocks < intervals_checked
             {
                 break;
             }
@@ -713,7 +697,7 @@ impl BranchState {
             );
 
             if blocks_to_download.len() >= requested_count
-                || cfg.max_bootstrap_interval_look_ahead_count <= intervals_checked
+                || cfg.max_bootstrap_interval_look_ahead_count_for_operations < intervals_checked
             {
                 return;
             }
@@ -822,54 +806,6 @@ impl BranchState {
         }
 
         batch_for_apply
-    }
-
-    /// Notify state requested_block_hash was downloaded
-    ///
-    /// <BM> callback which return (bool as downloaded, bool as applied, bool as are_operations_complete)
-    pub fn block_downloaded(
-        &mut self,
-        requested_block_hash: &BlockHash,
-        block_state_db: &BlockStateDb,
-    ) {
-        // at first check, what if requested block is already applied, this could removes all predecessor and/or the whole interval as optimization
-        if let Some(state) = block_state_db.blocks.get(requested_block_hash) {
-            if state.applied {
-                self.block_applied(&requested_block_hash, block_state_db);
-            }
-        };
-
-        // check all intervals which conttains that block
-        self.intervals
-            .iter_mut()
-            .filter(|interval| {
-                // find first interval with this block
-                interval
-                    .blocks
-                    .iter()
-                    .any(|b| b.as_ref().eq(requested_block_hash))
-            })
-            .for_each(|interval| interval.check_all_blocks_downloaded(block_state_db));
-    }
-
-    /// Notify state requested_block_hash has all downloaded operations.
-    /// Just checks if interval can be marked as closed.
-    pub fn block_operations_downloaded(
-        &mut self,
-        requested_block_hash: &BlockHash,
-        block_state_db: &BlockStateDb,
-    ) {
-        // check all intervals which conttains that block
-        self.intervals
-            .iter_mut()
-            .filter(|interval| {
-                // find first interval with this block
-                interval
-                    .blocks
-                    .iter()
-                    .any(|b| b.as_ref().eq(requested_block_hash))
-            })
-            .for_each(|interval| interval.check_all_operations_downloaded(block_state_db));
     }
 
     /// Notify state requested_block_hash has been applied
@@ -1018,22 +954,44 @@ impl BranchInterval {
         block_state_db: &BlockStateDb,
     ) {
         // shift/add missing predecessors
-        self.check_all_blocks_downloaded(block_state_db);
+        self.shift_and_check_all_blocks_downloaded(block_state_db);
         if self.all_blocks_downloaded {
             return;
         }
 
-        // find none downloaded blocks
-        for b in self.blocks.iter() {
+        // find next blocks to download
+        for (block_idx, block) in self.blocks.iter().enumerate() {
             // skip already scheduled
-            if ignored_blocks.contains(b) || blocks_to_download.contains(b) {
-                continue;
+            if ignored_blocks.contains(block) || blocks_to_download.contains(block) {
+                if block_idx == 0 {
+                    // we can continue on first block (could be a border of intervals)
+                    continue;
+                } else {
+                    // if cannot be scheduled, we skip this interval, because the rest should be already downloaded (no need to iterate over)
+                    break;
+                }
             }
 
             // check downloaded state
-            if let Some(state) = block_state_db.blocks.get(b) {
+            if let Some(state) = block_state_db.blocks.get(block) {
+                if state.block_downloaded {
+                    if block_idx == 0 {
+                        // we can continue on first block (could be a border of intervals)
+                        continue;
+                    } else {
+                        // if block is downloaded, we skip this interval, because the rest should be already downloaded (no need to iterate over)
+                        break;
+                    }
+                }
+
                 if !state.can_schedule_header_download(cfg) {
-                    continue;
+                    if block_idx == 0 {
+                        // we can continue on first block (could be a border of intervals)
+                        continue;
+                    } else {
+                        // if cannot be scheduled, we skip this interval, because the rest should be already downloaded (no need to iterate over)
+                        break;
+                    }
                 }
             }
 
@@ -1043,25 +1001,28 @@ impl BranchInterval {
             }
 
             // schedule for download
-            blocks_to_download.push(b.clone());
+            blocks_to_download.push(block.clone());
         }
     }
 
     /// Check, if we had downloaded the whole interval and adds/shifts already downloaded predecessors to interval
-    fn check_all_blocks_downloaded(&mut self, block_state_db: &BlockStateDb) {
-        if self.all_blocks_downloaded {
-            return;
-        }
-
+    /// We cannot shift, if block is not downloaded, other words, we can shift only if block is downloaded.
+    /// TODO: this is very ugly, needs to be refactored
+    fn shift_and_check_all_blocks_downloaded(&mut self, block_state_db: &BlockStateDb) {
         let mut stop_block: Option<Arc<BlockHash>> = None;
         let mut start_from_the_begining = true;
         while start_from_the_begining {
             start_from_the_begining = false;
 
+            // if interval is downloaded, just skip it
+            if self.all_blocks_downloaded {
+                break;
+            }
+
             let mut insert_predecessor: Option<(usize, Arc<BlockHash>)> = None;
             let mut previous: Option<&Arc<BlockHash>> = None;
 
-            for (idx, b) in self.blocks.iter().enumerate() {
+            for (block_idx, b) in self.blocks.iter().enumerate() {
                 // stop block optimization, because we are just prepending to blocks (optimization)
                 if let Some(stop_block) = stop_block.as_ref() {
                     if stop_block.eq(&b) {
@@ -1071,7 +1032,20 @@ impl BranchInterval {
 
                 // check state for download
                 let block_state = match block_state_db.blocks.get(b) {
-                    Some(state) => state,
+                    Some(state) => {
+                        if state.block_downloaded {
+                            state
+                        } else {
+                            // we can continue on first block (could be a border of intervals)
+                            if block_idx == 0 {
+                                previous = Some(b);
+                                continue;
+                            } else {
+                                // if block is now downloaded, we cannot continue and add predecessor
+                                break;
+                            }
+                        }
+                    }
                     None => {
                         // we dont downloaded block yet, so interval is not completed
                         return;
@@ -1084,8 +1058,20 @@ impl BranchInterval {
                         Some(block_predecessor) => {
                             if !previous_block.as_ref().eq(&block_predecessor) {
                                 // if previous block is not our predecessor, we need to insert it there
-                                insert_predecessor = Some((idx, block_predecessor.clone()));
+                                insert_predecessor = Some((block_idx, block_predecessor.clone()));
                                 stop_block = Some(b.clone());
+                                break;
+                            } else {
+                                // if previous is our predecessor we are ok, and there is no need to continue, because the rest should be also ok
+                                insert_predecessor = None;
+                                start_from_the_begining = false;
+
+                                if block_idx == 1 {
+                                    // if second block's predecessor matches first block, it means we can close the interval
+                                    // we can close interval now
+                                    self.all_blocks_downloaded = true;
+                                }
+
                                 break;
                             }
                         }
@@ -1109,36 +1095,7 @@ impl BranchInterval {
             }
         }
 
-        // if we came here, we just need to check if we downloaded the whole interval
-        let mut previous: Option<&Arc<BlockHash>> = None;
-        let mut all_blocks_downloaded = true;
-
-        for b in &self.blocks {
-            let block_state = match block_state_db.blocks.get(b) {
-                Some(state) => state,
-                None => return,
-            };
-            if !block_state.block_downloaded {
-                all_blocks_downloaded = false;
-                break;
-            }
-            if let Some(previous) = previous {
-                if let Some(block_predecessor) = &block_state.predecessor_block_hash {
-                    if !block_predecessor.eq(&previous) {
-                        all_blocks_downloaded = false;
-                        break;
-                    }
-                } else {
-                    // missing predecessor
-                    all_blocks_downloaded = false;
-                    break;
-                }
-            }
-            previous = Some(&b);
-        }
-
-        if all_blocks_downloaded {
-            self.all_blocks_downloaded = true;
+        if self.all_blocks_downloaded {
             self.check_all_operations_downloaded(block_state_db);
         }
     }
@@ -1817,7 +1774,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_blocks_to_download(
             1,
-            &cfg_max_interval_ahead(1),
+            &cfg_max_interval_ahead(1, 1),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -1834,15 +1791,11 @@ mod tests {
                 operations_downloaded: false,
             },
         );
-        pipeline.block_downloaded(&block(2), &block_state_db);
-        // interval not closed
-        assert!(!pipeline.intervals[0].all_blocks_downloaded);
-        assert_eq!(pipeline.intervals[0].blocks.len(), 3);
 
         let mut result = Vec::new();
         pipeline.collect_next_blocks_to_download(
             1,
-            &cfg_max_interval_ahead(1),
+            &cfg_max_interval_ahead(1, 1),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -1860,26 +1813,27 @@ mod tests {
                 operations_downloaded: false,
             },
         );
-        pipeline.block_downloaded(&block(1), &block_state_db);
-        // interval is closed
-        assert!(pipeline.intervals[0].all_blocks_downloaded);
-        assert_eq!(pipeline.intervals[0].blocks.len(), 3);
 
-        // next interval
-        assert!(!pipeline.intervals[1].all_blocks_downloaded);
-        assert_eq!(pipeline.intervals[1].blocks.len(), 2);
-
+        // get next blocks
         let mut result = Vec::new();
         pipeline.collect_next_blocks_to_download(
             3,
-            &cfg_max_interval_ahead(2),
+            &cfg_max_interval_ahead(2, 2),
             &HashSet::default(),
             &mut result,
             &block_state_db,
         );
+
+        // interval 0 is closed
+        assert!(pipeline.intervals[0].all_blocks_downloaded);
+        assert_eq!(pipeline.intervals[0].blocks.len(), 3);
         assert_eq!(2, result.len());
         assert_eq!(result[0].as_ref(), &block(5));
         assert_eq!(result[1].as_ref(), &block(8));
+
+        // next interval 1 is opened
+        assert!(!pipeline.intervals[1].all_blocks_downloaded);
+        assert_eq!(pipeline.intervals[1].blocks.len(), 2);
 
         // register downloaded block 5 with his predecessor 4
         block_state_db.update_block(
@@ -1891,126 +1845,34 @@ mod tests {
                 operations_downloaded: false,
             },
         );
-        pipeline.block_downloaded(&block(5), &block_state_db);
-        assert!(!pipeline.intervals[1].all_blocks_downloaded);
-        assert_eq!(pipeline.intervals[1].blocks.len(), 3);
-
         // register downloaded block 4 as applied
         block_state_db.update_block(
             &block(4),
             block(3),
             InnerBlockState {
                 block_downloaded: true,
-                applied: true,
+                applied: false,
                 operations_downloaded: false,
             },
         );
-        pipeline.block_downloaded(&block(4), &block_state_db);
 
         // first interval with block 2 and block 3 were removed, because if 4 is applied, 2/3 must be also
+        pipeline.intervals[0].shift_and_check_all_blocks_downloaded(&block_state_db);
         assert!(pipeline.intervals[0].all_blocks_downloaded);
-        assert_eq!(pipeline.intervals[0].blocks.len(), 2);
-        assert_eq!(pipeline.intervals[0].blocks[0].as_ref(), &block(4));
-        assert_eq!(pipeline.intervals[0].blocks[1].as_ref(), &block(5));
+        assert_eq!(pipeline.intervals[0].blocks.len(), 3);
+        assert_eq!(pipeline.intervals[0].blocks[0].as_ref(), &block(0));
+        assert_eq!(pipeline.intervals[0].blocks[1].as_ref(), &block(1));
+        assert_eq!(pipeline.intervals[0].blocks[2].as_ref(), &block(2));
 
+        pipeline.intervals[1].shift_and_check_all_blocks_downloaded(&block_state_db);
         assert!(!pipeline.intervals[1].all_blocks_downloaded);
-        assert_eq!(pipeline.intervals[1].blocks.len(), 2);
-        assert_eq!(pipeline.intervals[1].blocks[0].as_ref(), &block(5));
-        assert_eq!(pipeline.intervals[1].blocks[1].as_ref(), &block(8));
+        assert_eq!(pipeline.intervals[1].blocks.len(), 4);
+        assert_eq!(pipeline.intervals[1].blocks[0].as_ref(), &block(2));
+        assert_eq!(pipeline.intervals[1].blocks[1].as_ref(), &block(3));
+        assert_eq!(pipeline.intervals[1].blocks[2].as_ref(), &block(4));
+        assert_eq!(pipeline.intervals[1].blocks[3].as_ref(), &block(5));
 
         Ok(())
-    }
-
-    #[test]
-    fn test_bootstrap_state_block_applied() {
-        // genesis
-        let last_applied = block(0);
-        // history blocks
-        let history: Vec<BlockHash> = vec![
-            block(2),
-            block(5),
-            block(8),
-            block(10),
-            block(13),
-            block(15),
-            block(20),
-        ];
-
-        // create
-        let mut block_state_db = BlockStateDb::new(50);
-
-        let mut pipeline = BranchState::new(last_applied, history, 20, &mut block_state_db);
-        assert_eq!(pipeline.intervals.len(), 7);
-        assert_interval(&pipeline.intervals[0], (block(0), block(2)));
-        assert_interval(&pipeline.intervals[1], (block(2), block(5)));
-        assert_interval(&pipeline.intervals[2], (block(5), block(8)));
-        assert_interval(&pipeline.intervals[3], (block(8), block(10)));
-        assert_interval(&pipeline.intervals[4], (block(10), block(13)));
-        assert_interval(&pipeline.intervals[5], (block(13), block(15)));
-        assert_interval(&pipeline.intervals[6], (block(15), block(20)));
-
-        // check intervals
-        assert_eq!(pipeline.intervals.len(), 7);
-
-        // check first block (block(2) ) from next 1 interval
-        assert!(
-            !block_state_db
-                .blocks
-                .get(&pipeline.intervals[1].blocks[0])
-                .unwrap()
-                .applied
-        );
-        assert!(
-            !block_state_db
-                .blocks
-                .get(&pipeline.intervals[1].blocks[0])
-                .unwrap()
-                .block_downloaded
-        );
-        assert!(
-            !block_state_db
-                .blocks
-                .get(&pipeline.intervals[1].blocks[0])
-                .unwrap()
-                .operations_downloaded
-        );
-
-        // register downloaded block 2 which is applied
-        block_state_db.update_block(
-            &block(2),
-            block(1),
-            InnerBlockState {
-                block_downloaded: true,
-                applied: true,
-                operations_downloaded: false,
-            },
-        );
-        pipeline.block_downloaded(&block(2), &block_state_db);
-        // interval 0 was removed
-        assert_eq!(pipeline.intervals.len(), 6);
-        // and first block of next interval is marked the same as the last block from 0 inerval, becauase it is the same block (block(2))
-        // check first block (block(2) ) from next 1 interval
-        assert!(
-            block_state_db
-                .blocks
-                .get(&pipeline.intervals[0].blocks[0])
-                .unwrap()
-                .applied
-        );
-        assert!(
-            block_state_db
-                .blocks
-                .get(&pipeline.intervals[0].blocks[0])
-                .unwrap()
-                .block_downloaded
-        );
-        assert!(
-            !block_state_db
-                .blocks
-                .get(&pipeline.intervals[0].blocks[0])
-                .unwrap()
-                .operations_downloaded
-        );
     }
 
     #[test]
@@ -2054,7 +1916,8 @@ mod tests {
                 operations_downloaded: false,
             },
         );
-        pipeline.block_downloaded(&block(2), &block_state_db);
+        pipeline.intervals[0].shift_and_check_all_blocks_downloaded(&block_state_db);
+
         // mark 1 as applied (half of interval)
         block_state_db.mark_block_applied(&block(1));
         pipeline.block_applied(&block(1), &block_state_db);
@@ -2157,7 +2020,7 @@ mod tests {
         let mut blocks_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             5,
-            &cfg_max_interval_ahead(7),
+            &cfg_max_interval_ahead(7, 7),
             &HashSet::default(),
             &mut blocks_to_download,
             &block_state_db,
@@ -2173,7 +2036,7 @@ mod tests {
         let mut blocks_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             2,
-            &cfg_max_interval_ahead(7),
+            &cfg_max_interval_ahead(7, 7),
             &HashSet::default(),
             &mut blocks_to_download,
             &block_state_db,
@@ -2186,7 +2049,7 @@ mod tests {
         let mut blocks_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             2,
-            &cfg_max_interval_ahead(7),
+            &cfg_max_interval_ahead(7, 7),
             &hash_set![block_ref(5)],
             &mut blocks_to_download,
             &block_state_db,
@@ -2257,12 +2120,12 @@ mod tests {
         let mut blocks_to_download1 = Vec::new();
         pipeline1.collect_next_blocks_to_download(
             15,
-            &cfg_max_interval_ahead(10),
+            &cfg_max_interval_ahead(10, 10),
             &HashSet::default(),
             &mut blocks_to_download1,
             &block_state_db,
         );
-        assert_eq!(10, blocks_to_download1.len());
+        assert_eq!(11, blocks_to_download1.len());
         assert_eq!(blocks_to_download1[0].as_ref(), &block(2));
         assert_eq!(blocks_to_download1[1].as_ref(), &block(5));
         assert_eq!(blocks_to_download1[2].as_ref(), &block(8));
@@ -2273,6 +2136,7 @@ mod tests {
         assert_eq!(blocks_to_download1[7].as_ref(), &block(25));
         assert_eq!(blocks_to_download1[8].as_ref(), &block(30));
         assert_eq!(blocks_to_download1[9].as_ref(), &block(35));
+        assert_eq!(blocks_to_download1[10].as_ref(), &block(40));
 
         // download 8
         block_state_db.update_block(
@@ -2284,7 +2148,6 @@ mod tests {
                 applied: false,
             },
         );
-        pipeline1.block_downloaded(&block(8), &block_state_db);
         // download 7
         block_state_db.update_block(
             &block(7),
@@ -2295,7 +2158,6 @@ mod tests {
                 applied: false,
             },
         );
-        pipeline1.block_downloaded(&block(7), &block_state_db);
         // download 20
         block_state_db.update_block(
             &block(20),
@@ -2390,7 +2252,7 @@ mod tests {
         let mut blocks_to_download2 = Vec::new();
         pipeline2.collect_next_blocks_to_download(
             15,
-            &cfg_max_interval_ahead(10),
+            &cfg_max_interval_ahead(10, 10),
             &HashSet::default(),
             &mut blocks_to_download2,
             &block_state_db,
@@ -2427,7 +2289,7 @@ mod tests {
         assert_eq!(pipeline2.intervals[5].blocks[0].as_ref(), &block(20));
         assert_eq!(pipeline2.intervals[5].blocks[1].as_ref(), &block(25));
 
-        assert_eq!(10, blocks_to_download2.len());
+        assert_eq!(11, blocks_to_download2.len());
         assert_eq!(blocks_to_download2[0].as_ref(), &block(6));
         assert_eq!(blocks_to_download2[1].as_ref(), &block(10));
         assert_eq!(blocks_to_download2[2].as_ref(), &block(13));
@@ -2438,10 +2300,11 @@ mod tests {
         assert_eq!(blocks_to_download2[7].as_ref(), &block(35));
         assert_eq!(blocks_to_download2[8].as_ref(), &block(40));
         assert_eq!(blocks_to_download2[9].as_ref(), &block(43));
+        assert_eq!(blocks_to_download2[10].as_ref(), &block(46));
     }
 
     #[test]
-    fn test_collect_next_blocks_to_download_feed_interval_on_block_download() {
+    fn test_shift_and_check_all_blocks_downloaded() {
         // genesis
         let last_applied = block(0);
         // history blocks
@@ -2548,11 +2411,6 @@ mod tests {
             },
         );
 
-        // mark 8 as downloaded in pipeline, should shift to 5
-        pipeline1.block_downloaded(&block(8), &block_state_db);
-        pipeline1.block_downloaded(&block(20), &block_state_db);
-        // mark 20 as downloaded in pipeline, should shift to 16
-
         // check pre-feeded intervals (with blocks downloaded before)
         assert_eq!(pipeline1.intervals[0].blocks.len(), 2);
         assert_eq!(pipeline1.intervals[0].blocks[0].as_ref(), &block(0));
@@ -2562,12 +2420,16 @@ mod tests {
         assert_eq!(pipeline1.intervals[1].blocks[0].as_ref(), &block(2));
         assert_eq!(pipeline1.intervals[1].blocks[1].as_ref(), &block(5));
 
+        // mark 8 as downloaded in pipeline, should shift to 5
+        pipeline1.intervals[2].shift_and_check_all_blocks_downloaded(&block_state_db);
         assert_eq!(pipeline1.intervals[2].blocks.len(), 4);
         assert_eq!(pipeline1.intervals[2].blocks[0].as_ref(), &block(5));
         assert_eq!(pipeline1.intervals[2].blocks[1].as_ref(), &block(6));
         assert_eq!(pipeline1.intervals[2].blocks[2].as_ref(), &block(7));
         assert_eq!(pipeline1.intervals[2].blocks[3].as_ref(), &block(8));
 
+        // mark 20 as downloaded in pipeline, should shift to 16
+        pipeline1.intervals[6].shift_and_check_all_blocks_downloaded(&block_state_db);
         assert_eq!(pipeline1.intervals[6].blocks.len(), 5);
         assert_eq!(pipeline1.intervals[6].blocks[0].as_ref(), &block(15));
         assert_eq!(pipeline1.intervals[6].blocks[1].as_ref(), &block(17));
@@ -2617,13 +2479,12 @@ mod tests {
                 operations_downloaded: false,
             },
         );
-        pipeline.block_downloaded(&block(2), &block_state_db);
 
         // get next for download from first interval
         let mut missing_blocks = Vec::new();
         pipeline.intervals[0].collect_block_with_missing_operations(
             2,
-            &cfg_max_interval_ahead(100),
+            &cfg_max_interval_ahead(100, 100),
             &HashSet::default(),
             &mut missing_blocks,
             &block_state_db,
@@ -2637,7 +2498,7 @@ mod tests {
         let mut missing_blocks = Vec::new();
         pipeline.intervals[1].collect_block_with_missing_operations(
             2,
-            &cfg_max_interval_ahead(100),
+            &cfg_max_interval_ahead(100, 100),
             &hash_set![block_ref(2)],
             &mut missing_blocks,
             &block_state_db,
@@ -2650,7 +2511,7 @@ mod tests {
         let mut missing_blocks = Vec::new();
         pipeline.intervals[2].collect_block_with_missing_operations(
             2,
-            &cfg_max_interval_ahead(100),
+            &cfg_max_interval_ahead(100, 100),
             &hash_set![block_ref(1)],
             &mut missing_blocks,
             &block_state_db,
@@ -2699,7 +2560,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_block_operations_to_download(
             1,
-            &cfg_max_interval_ahead(5),
+            &cfg_max_interval_ahead(5, 5),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -2711,7 +2572,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_block_operations_to_download(
             4,
-            &cfg_max_interval_ahead(7),
+            &cfg_max_interval_ahead(7, 7),
             &HashSet::default(),
             &mut result,
             &block_state_db,
@@ -2726,7 +2587,7 @@ mod tests {
         let mut result = Vec::new();
         pipeline.collect_next_block_operations_to_download(
             4,
-            &cfg_max_interval_ahead(7),
+            &cfg_max_interval_ahead(7, 7),
             &hash_set![block_ref(5), block_ref(10)],
             &mut result,
             &block_state_db,
@@ -2776,8 +2637,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(8), &block_state_db);
-
         block_state_db.update_block(
             &block(7),
             block(6),
@@ -2787,8 +2646,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(7), &block_state_db);
-
         block_state_db.update_block(
             &block(6),
             block(5),
@@ -2798,8 +2655,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(6), &block_state_db);
-
         block_state_db.update_block(
             &block(5),
             block(4),
@@ -2809,8 +2664,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(5), &block_state_db);
-
         block_state_db.update_block(
             &block(4),
             block(3),
@@ -2820,8 +2673,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(4), &block_state_db);
-
         block_state_db.update_block(
             &block(3),
             block(2),
@@ -2831,8 +2682,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(3), &block_state_db);
-
         block_state_db.update_block(
             &block(2),
             block(1),
@@ -2842,8 +2691,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(2), &block_state_db);
-
         block_state_db.update_block(
             &block(1),
             block(0),
@@ -2853,9 +2700,11 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(1), &block_state_db);
 
         // check all downloaded inervals
+        pipeline.intervals[0].shift_and_check_all_blocks_downloaded(&block_state_db);
+        pipeline.intervals[1].shift_and_check_all_blocks_downloaded(&block_state_db);
+
         assert!(pipeline.intervals[0].all_blocks_downloaded);
         assert!(pipeline.intervals[0].all_operations_downloaded);
         assert!(pipeline.intervals[1].all_blocks_downloaded);
@@ -2900,8 +2749,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(8), &block_state_db);
-
         block_state_db.update_block(
             &block(7),
             block(6),
@@ -2911,8 +2758,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(7), &block_state_db);
-
         block_state_db.update_block(
             &block(6),
             block(5),
@@ -2922,8 +2767,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(6), &block_state_db);
-
         block_state_db.update_block(
             &block(5),
             block(4),
@@ -2933,8 +2776,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(5), &block_state_db);
-
         block_state_db.update_block(
             &block(4),
             block(3),
@@ -2944,8 +2785,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(4), &block_state_db);
-
         block_state_db.update_block(
             &block(3),
             block(2),
@@ -2955,8 +2794,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(3), &block_state_db);
-
         block_state_db.update_block(
             &block(2),
             block(1),
@@ -2966,8 +2803,6 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(2), &block_state_db);
-
         block_state_db.update_block(
             &block(1),
             block(0),
@@ -2977,13 +2812,12 @@ mod tests {
                 operations_downloaded: true,
             },
         );
-        pipeline.block_downloaded(&block(1), &block_state_db);
 
-        // check all downloaded inervals
-        assert!(pipeline.intervals[0].all_blocks_downloaded);
-        assert!(pipeline.intervals[0].all_operations_downloaded);
-        assert!(pipeline.intervals[1].all_blocks_downloaded);
-        assert!(pipeline.intervals[1].all_operations_downloaded);
+        // we need to shift intervals
+        pipeline.intervals[0].shift_and_check_all_blocks_downloaded(&block_state_db);
+        pipeline.intervals[1].shift_and_check_all_blocks_downloaded(&block_state_db);
+        pipeline.intervals[2].shift_and_check_all_blocks_downloaded(&block_state_db);
+        pipeline.intervals[3].shift_and_check_all_blocks_downloaded(&block_state_db);
 
         // next for apply with max batch 0
         let next_batch = pipeline.find_next_block_to_apply(0, &block_state_db);
@@ -3046,7 +2880,7 @@ mod tests {
         let mut headers_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             1,
-            &cfg_max_interval_ahead(1),
+            &cfg_max_interval_ahead(1, 1),
             &HashSet::default(),
             &mut headers_to_download,
             &block_state_db,
@@ -3057,18 +2891,19 @@ mod tests {
         block_state_db.mark_scheduled_for_block_header_download(&block(2));
 
         // cfg with reschedule timeout 1000 ms
-        let mut cfg = cfg_max_interval_ahead(1);
+        let mut cfg = cfg_max_interval_ahead(1, 1);
         cfg.block_data_reschedule_timeout = Duration::from_millis(1000);
 
         let mut headers_to_download = Vec::new();
         pipeline.collect_next_blocks_to_download(
             1,
-            &cfg_max_interval_ahead(1),
+            &cfg_max_interval_ahead(1, 1),
             &HashSet::default(),
             &mut headers_to_download,
             &block_state_db,
         );
-        assert_eq!(0, headers_to_download.len());
+        assert_eq!(1, headers_to_download.len());
+        assert_eq!(headers_to_download[0].as_ref(), &block(5));
 
         // sleep a little bit
         std::thread::sleep(Duration::from_millis(100));
@@ -3096,7 +2931,7 @@ mod tests {
             .is_some());
         block_state_db.update_block(
             &block(2),
-            block(2),
+            block(1),
             InnerBlockState {
                 block_downloaded: true,
                 operations_downloaded: false,
@@ -3122,7 +2957,8 @@ mod tests {
             &mut headers_to_download,
             &block_state_db,
         );
-        assert_eq!(0, headers_to_download.len());
+        assert_eq!(1, headers_to_download.len());
+        assert_eq!(headers_to_download[0].as_ref(), &block(5));
 
         // sleep a little bit
         std::thread::sleep(Duration::from_millis(100));
@@ -3206,7 +3042,7 @@ mod tests {
         assert_eq!(8, block_state_db.blocks.len());
 
         // cfg
-        let mut cfg = cfg_max_interval_ahead(2);
+        let mut cfg = cfg_max_interval_ahead(2, 2);
         cfg.block_data_reschedule_timeout = Duration::from_secs(15);
 
         // simulate schedulue for pipeline1
@@ -3218,9 +3054,10 @@ mod tests {
             &mut result1,
             &block_state_db,
         );
-        assert_eq!(2, result1.len());
+        assert_eq!(3, result1.len());
         assert_eq!(result1[0].as_ref(), &block(2));
         assert_eq!(result1[1].as_ref(), &block(5));
+        assert_eq!(result1[2].as_ref(), &block(8));
         result1
             .iter()
             .for_each(|b| block_state_db.mark_scheduled_for_block_header_download(&b));
@@ -3246,13 +3083,17 @@ mod tests {
         assert_eq!(tested.blocks[1].as_ref(), &expected_right);
     }
 
-    fn cfg_max_interval_ahead(max_interval_ahead: u8) -> PeerBranchBootstrapperConfiguration {
+    fn cfg_max_interval_ahead(
+        max_interval_ahead_for_blocks: u8,
+        max_interval_ahead_for_operations: u8,
+    ) -> PeerBranchBootstrapperConfiguration {
         PeerBranchBootstrapperConfiguration::new(
             Duration::from_secs(1),
             Duration::from_secs(1),
             Duration::from_secs(1),
             Duration::from_secs(1),
-            max_interval_ahead,
+            max_interval_ahead_for_blocks,
+            max_interval_ahead_for_operations,
             1,
             100,
         )

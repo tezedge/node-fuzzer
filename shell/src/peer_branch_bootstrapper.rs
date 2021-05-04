@@ -77,18 +77,12 @@ impl StartBranchBootstraping {
 #[derive(Clone, Debug)]
 pub struct UpdateOperationsState {
     block_hash: BlockHash,
-    peer_id: Arc<PeerId>,
     data_lock: Option<Arc<RequestedOperationDataLock>>,
 }
 
 impl UpdateOperationsState {
-    pub fn new(
-        peer_id: Arc<PeerId>,
-        block_hash: BlockHash,
-        data_lock: Option<RequestedOperationDataLock>,
-    ) -> Self {
+    pub fn new(block_hash: BlockHash, data_lock: Option<RequestedOperationDataLock>) -> Self {
         Self {
-            peer_id,
             block_hash,
             data_lock: data_lock.map(Arc::new),
         }
@@ -100,20 +94,17 @@ pub struct UpdateBlockState {
     block_hash: BlockHash,
     predecessor_block_hash: BlockHash,
     new_state: InnerBlockState,
-    peer_id: Arc<PeerId>,
     data_lock: Option<Arc<RequestedBlockDataLock>>,
 }
 
 impl UpdateBlockState {
     pub fn new(
-        peer_id: Arc<PeerId>,
         block_hash: BlockHash,
         predecessor_block_hash: BlockHash,
         new_state: InnerBlockState,
         data_lock: Option<RequestedBlockDataLock>,
     ) -> Self {
         Self {
-            peer_id,
             block_hash,
             predecessor_block_hash,
             new_state,
@@ -149,7 +140,8 @@ pub struct PeerBranchBootstrapperConfiguration {
     /// Other word, we limit uniquenness request till this timeout
     pub(crate) block_data_reschedule_timeout: Duration,
 
-    pub(crate) max_bootstrap_interval_look_ahead_count: u8,
+    pub(crate) max_bootstrap_interval_look_ahead_count_for_blocks: u8,
+    pub(crate) max_bootstrap_interval_look_ahead_count_for_operations: u8,
     max_bootstrap_branches_per_peer: usize,
     max_block_apply_batch: usize,
 }
@@ -160,7 +152,8 @@ impl PeerBranchBootstrapperConfiguration {
         block_operations_timeout: Duration,
         block_data_reschedule_timeout: Duration,
         missing_new_branch_bootstrap_timeout: Duration,
-        max_bootstrap_interval_look_ahead_count: u8,
+        max_bootstrap_interval_look_ahead_count_for_blocks: u8,
+        max_bootstrap_interval_look_ahead_count_for_operations: u8,
         max_bootstrap_branches_per_peer: usize,
         max_block_apply_batch: usize,
     ) -> Self {
@@ -169,7 +162,8 @@ impl PeerBranchBootstrapperConfiguration {
             block_operations_timeout,
             block_data_reschedule_timeout,
             missing_new_branch_bootstrap_timeout,
-            max_bootstrap_interval_look_ahead_count,
+            max_bootstrap_interval_look_ahead_count_for_blocks,
+            max_bootstrap_interval_look_ahead_count_for_operations,
             max_bootstrap_branches_per_peer,
             max_block_apply_batch,
         }
@@ -244,7 +238,6 @@ impl PeerBranchBootstrapper {
         &mut self,
         ctx: &Context<PeerBranchBootstrapperMsg>,
         log: &Logger,
-        peer: Option<Arc<PeerId>>,
     ) {
         let PeerBranchBootstrapper {
             bootstrap_state,
@@ -256,10 +249,10 @@ impl PeerBranchBootstrapper {
         } = self;
 
         // schedule missing blocks for download
-        bootstrap_state.schedule_blocks_to_download(&peer, requester, cfg, log);
+        bootstrap_state.schedule_blocks_to_download(requester, cfg, log);
 
         // schedule missing operations for download
-        bootstrap_state.schedule_operations_to_download(&peer, requester, cfg, log);
+        bootstrap_state.schedule_operations_to_download(requester, cfg, log);
 
         // schedule missing operations for download
         bootstrap_state.schedule_blocks_for_apply(
@@ -401,7 +394,7 @@ impl Receive<StartBranchBootstraping> for PeerBranchBootstrapper {
         );
 
         // process
-        self.process_bootstrap_pipelines(ctx, &log, Some(msg.peer_id))
+        self.process_bootstrap_pipelines(ctx, &log)
     }
 }
 
@@ -414,7 +407,7 @@ impl Receive<PingBootstrapPipelinesProcessing> for PeerBranchBootstrapper {
         _: PingBootstrapPipelinesProcessing,
         _: Option<BasicActorRef>,
     ) {
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), None);
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
     }
 }
 
@@ -484,7 +477,6 @@ impl Receive<UpdateBlockState> for PeerBranchBootstrapper {
             predecessor_block_hash,
             new_state,
             data_lock,
-            peer_id,
         } = msg;
         self.bootstrap_state
             .block_downloaded(block_hash, predecessor_block_hash, new_state);
@@ -493,7 +485,7 @@ impl Receive<UpdateBlockState> for PeerBranchBootstrapper {
         drop(data_lock);
 
         // process bootstrap
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(peer_id));
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
     }
 }
 
@@ -514,7 +506,7 @@ impl Receive<UpdateOperationsState> for PeerBranchBootstrapper {
         drop(msg.data_lock);
 
         // process
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), Some(msg.peer_id));
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log());
     }
 }
 
@@ -531,7 +523,7 @@ impl Receive<ApplyBlockBatchDone> for PeerBranchBootstrapper {
         self.bootstrap_state.block_applied(&msg.last_applied);
 
         // process
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), None)
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log())
     }
 }
 
@@ -549,7 +541,7 @@ impl Receive<ApplyBlockBatchFailed> for PeerBranchBootstrapper {
             .block_apply_failed(&msg.failed_block, &ctx.system.log());
 
         // process
-        self.process_bootstrap_pipelines(ctx, &ctx.system.log(), None)
+        self.process_bootstrap_pipelines(ctx, &ctx.system.log())
     }
 }
 

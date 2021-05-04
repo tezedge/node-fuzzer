@@ -10,7 +10,6 @@ use slog::Logger;
 
 use crypto::hash::{BlockHash, ChainId, ProtocolHash};
 use crypto::seeded_step::{Seed, Step};
-use networking::PeerId;
 use storage::block_meta_storage::Meta;
 use storage::chain_meta_storage::ChainMetaStorageReader;
 use storage::PersistentStorage;
@@ -60,7 +59,8 @@ pub(crate) mod bootstrap_constants {
     pub(crate) const MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60 * 2);
 
     /// We can controll speedup of downloading blocks from network
-    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT: u8 = 1;
+    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_BLOCKS: u8 = 2;
+    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_OPERATIONS: u8 = 0;
 
     /// We can validate just few branches/head from one peer, so we limit it by this constant
     pub(crate) const MAX_BOOTSTRAP_BRANCHES_PER_PEER: usize = 2;
@@ -475,7 +475,8 @@ impl BlockchainState {
                             bootstrap_constants::BLOCK_OPERATIONS_TIMEOUT,
                             bootstrap_constants::BLOCK_DATA_RESCHEDULE_TIMEOUT,
                             bootstrap_constants::MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT,
-                            bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT,
+                            bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_BLOCKS,
+                            bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_OPERATIONS,
                             bootstrap_constants::MAX_BOOTSTRAP_BRANCHES_PER_PEER,
                             bootstrap_constants::MAX_BLOCK_APPLY_BATCH,
                         ),
@@ -513,7 +514,6 @@ impl BlockchainState {
         received_block: &BlockHeaderWithHash,
         log: &Logger,
         data_lock: Option<RequestedBlockDataLock>,
-        peer: Arc<PeerId>,
     ) -> Result<bool, StorageError> {
         // store block
         let is_new_block = self.block_storage.put_block_header(received_block)?;
@@ -530,7 +530,6 @@ impl BlockchainState {
         if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper() {
             peer_branch_bootstrapper.tell(
                 UpdateBlockState::new(
-                    peer,
                     received_block.hash.clone(),
                     received_block.header.predecessor().clone(),
                     InnerBlockState {
@@ -621,7 +620,6 @@ impl BlockchainState {
         block_hash: BlockHash,
         message: &OperationsForBlocksMessage,
         data_lock: Option<RequestedOperationDataLock>,
-        peer: Arc<PeerId>,
     ) -> Result<bool, StateError> {
         // TODO: TE-369 - optimize double check
         // we need to differ this flag
@@ -637,10 +635,8 @@ impl BlockchainState {
         if are_operations_complete {
             // ping branch bootstrapper with received operations
             if let Some(peer_branch_bootstrapper) = self.peer_branch_bootstrapper.as_ref() {
-                peer_branch_bootstrapper.tell(
-                    UpdateOperationsState::new(peer, block_hash, data_lock),
-                    None,
-                );
+                peer_branch_bootstrapper
+                    .tell(UpdateOperationsState::new(block_hash, data_lock), None);
             }
         }
 
