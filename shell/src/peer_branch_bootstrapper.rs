@@ -493,7 +493,7 @@ impl Receive<UpdateOperationsState> for PeerBranchBootstrapper {
     ) {
         // process message
         self.bootstrap_state
-            .block_operations_downloaded(msg.block_hash);
+            .block_operations_downloaded(&msg.block_hash);
 
         // explicit drop (not needed)
         drop(msg.data_lock);
