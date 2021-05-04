@@ -59,8 +59,7 @@ pub(crate) mod bootstrap_constants {
     pub(crate) const MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60 * 2);
 
     /// We can controll speedup of downloading blocks from network
-    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_BLOCKS: u8 = 2;
-    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_OPERATIONS: u8 = 0;
+    pub(crate) const MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_BLOCKS: u8 = 6;
 
     /// We can validate just few branches/head from one peer, so we limit it by this constant
     pub(crate) const MAX_BOOTSTRAP_BRANCHES_PER_PEER: usize = 2;
@@ -476,7 +475,6 @@ impl BlockchainState {
                             bootstrap_constants::BLOCK_DATA_RESCHEDULE_TIMEOUT,
                             bootstrap_constants::MISSING_NEW_BRANCH_BOOTSTRAP_TIMEOUT,
                             bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_BLOCKS,
-                            bootstrap_constants::MAX_BOOTSTRAP_INTERVAL_LOOK_AHEAD_COUNT_FOR_OPERATIONS,
                             bootstrap_constants::MAX_BOOTSTRAP_BRANCHES_PER_PEER,
                             bootstrap_constants::MAX_BLOCK_APPLY_BATCH,
                         ),
