@@ -141,7 +141,7 @@ pub struct PeerBranchBootstrapperConfiguration {
     pub(crate) block_data_reschedule_timeout: Duration,
 
     pub(crate) max_bootstrap_interval_look_ahead_count_for_blocks: u8,
-    pub(crate) max_bootstrap_interval_look_ahead_count_for_operations: u8,
+
     max_bootstrap_branches_per_peer: usize,
     max_block_apply_batch: usize,
 }
@@ -153,7 +153,6 @@ impl PeerBranchBootstrapperConfiguration {
         block_data_reschedule_timeout: Duration,
         missing_new_branch_bootstrap_timeout: Duration,
         max_bootstrap_interval_look_ahead_count_for_blocks: u8,
-        max_bootstrap_interval_look_ahead_count_for_operations: u8,
         max_bootstrap_branches_per_peer: usize,
         max_block_apply_batch: usize,
     ) -> Self {
@@ -163,7 +162,6 @@ impl PeerBranchBootstrapperConfiguration {
             block_data_reschedule_timeout,
             missing_new_branch_bootstrap_timeout,
             max_bootstrap_interval_look_ahead_count_for_blocks,
-            max_bootstrap_interval_look_ahead_count_for_operations,
             max_bootstrap_branches_per_peer,
             max_block_apply_batch,
         }
@@ -436,11 +434,7 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
         ) = self.bootstrap_state.blocks_stats();
         let (
             processing_peer_branches,
-            (
-                processing_block_intervals,
-                processing_block_intervals_downloaded,
-                processing_block_intervals_operations_downloaded,
-            ),
+            (processing_block_intervals, processing_block_intervals_downloaded),
         ) = self.bootstrap_state.block_intervals_stats();
 
         info!(ctx.system.log(), "Peer branch bootstrapper processing info";
@@ -449,7 +443,6 @@ impl Receive<LogStats> for PeerBranchBootstrapper {
                    "peers_branches" => processing_peer_branches,
                    "block_intervals" => processing_block_intervals,
                    "block_intervals_downloaded" => processing_block_intervals_downloaded,
-                   "block_intervals_operations_downloaded" => processing_block_intervals_operations_downloaded,
                    "block_intervals_next_lowest_missing_blocks" => self.bootstrap_state.next_lowest_missing_blocks().iter().map(|b|b.to_base58_check()).collect::<Vec<_>>().join(", "),
                    "blocks" => processing_blocks,
                    "blocks_downloaded" => processing_blocks_downloaded,
