@@ -460,11 +460,19 @@ impl BootstrapState {
         predecessor_block_hash: BlockHash,
         new_state: InnerBlockState,
     ) {
-        self.block_state_db
-            .update_block(&block_hash, predecessor_block_hash, new_state);
+        if new_state.operations_downloaded {
+            self.block_operations_downloaded(&block_hash);
+        }
+
+        if new_state.applied {
+            self.block_applied(&block_hash);
+        } else {
+            self.block_state_db
+                .update_block(&block_hash, predecessor_block_hash, new_state);
+        }
     }
 
-    pub fn block_operations_downloaded(&mut self, block_hash: BlockHash) {
+    pub fn block_operations_downloaded(&mut self, block_hash: &BlockHash) {
         let BootstrapState {
             peers,
             block_state_db,
@@ -640,6 +648,7 @@ impl BranchState {
         }
 
         let mut intervals_checked = 0;
+        let mut last_applied_block = None;
 
         // lets iterate intervals
         for interval in self.intervals.iter_mut() {
@@ -649,6 +658,16 @@ impl BranchState {
             }
             intervals_checked += 1;
 
+            // shift/add missing predecessors or trim start with applied block
+            let last_applied_block_found = interval.shift_and_check_all_blocks_downloaded(
+                block_state_db,
+                &mut self.missing_operations,
+            );
+            if last_applied_block_found.is_some() {
+                last_applied_block = last_applied_block_found;
+                continue;
+            }
+
             // let walk throught interval and resolve first missing block
             interval.collect_first_missing_block(
                 requested_count,
@@ -656,7 +675,6 @@ impl BranchState {
                 ignored_blocks,
                 blocks_to_download,
                 block_state_db,
-                &mut self.missing_operations,
             );
 
             // check if we have enought
@@ -665,6 +683,11 @@ impl BranchState {
             {
                 break;
             }
+        }
+
+        // if found applied block, handle it and trim interval
+        if let Some(last_applied_block) = last_applied_block {
+            self.block_applied(&last_applied_block, &block_state_db);
         }
     }
 
@@ -972,10 +995,7 @@ impl BranchInterval {
         ignored_blocks: &HashSet<BlockRef>,
         blocks_to_download: &mut Vec<BlockRef>,
         block_state_db: &BlockStateDb,
-        missing_operations: &mut HashSet<BlockRef>,
     ) {
-        // shift/add missing predecessors
-        self.shift_and_check_all_blocks_downloaded(block_state_db, missing_operations);
         if self.all_blocks_downloaded {
             return;
         }
@@ -1028,12 +1048,14 @@ impl BranchInterval {
 
     /// Check, if we had downloaded the whole interval and adds/shifts already downloaded predecessors to interval
     /// We cannot shift, if block is not downloaded, other words, we can shift only if block is downloaded.
+    ///
+    /// Returns, last found  applied block (we can shrink this interval)
     /// TODO: this is very ugly, needs to be refactored
     fn shift_and_check_all_blocks_downloaded(
         &mut self,
         block_state_db: &BlockStateDb,
         missing_operations: &mut HashSet<BlockRef>,
-    ) {
+    ) -> Option<BlockRef> {
         let mut stop_block: Option<BlockRef> = None;
         let mut start_from_the_begining = true;
         while start_from_the_begining {
@@ -1058,6 +1080,16 @@ impl BranchInterval {
                 // check state for download
                 let block_state = match block_state_db.blocks.get(b) {
                     Some(state) => {
+                        if state.applied {
+                            // we can continue on first block (could be a border of intervals)
+                            if block_idx == 0 {
+                                previous = Some(b);
+                                continue;
+                            } else {
+                                // we found highest applied block in this interval, so we finish and shrink this interval
+                                return Some(b.clone());
+                            }
+                        }
                         if state.block_downloaded {
                             if !state.operations_downloaded {
                                 missing_operations.insert(b.clone());
@@ -1076,7 +1108,7 @@ impl BranchInterval {
                     }
                     None => {
                         // we dont downloaded block yet, so interval is not completed
-                        return;
+                        return None;
                     }
                 };
 
@@ -1105,7 +1137,7 @@ impl BranchInterval {
                         }
                         None => {
                             // we dont have predecessor yet, so interval is not completed
-                            return;
+                            return None;
                         }
                     }
                 }
@@ -1122,6 +1154,8 @@ impl BranchInterval {
                 }
             }
         }
+
+        None
     }
 }
 
@@ -1341,6 +1375,10 @@ impl BlockStateDb {
         let predecessor = if let Some(block_state) = self.blocks.get_mut(block_hash) {
             block_state.applied = true;
             block_state.scheduled_for_apply = false;
+            block_state.block_downloaded = true;
+            block_state.operations_downloaded = true;
+            block_state.block_header_requested = None;
+            block_state.block_operations_requested = None;
             block_state.predecessor_block_hash.clone()
         } else {
             let mut block_state = BlockState::new_applied();
@@ -1354,12 +1392,8 @@ impl BlockStateDb {
         // also mark all predecessors as applied
         let mut predecessor_selector = predecessor;
         while let Some(predecessor) = predecessor_selector {
-            predecessor_selector = match self.blocks.get_mut(&predecessor) {
-                Some(predecessor_state) => {
-                    predecessor_state.applied = true;
-                    predecessor_state.scheduled_for_apply = false;
-                    predecessor_state.predecessor_block_hash.clone()
-                }
+            predecessor_selector = match self.blocks.remove(&predecessor) {
+                Some(predecessor_state) => predecessor_state.predecessor_block_hash,
                 None => None,
             };
         }
@@ -1954,8 +1988,8 @@ mod tests {
 
         // direct predecessors should be marked as applied
         assert!(block_state_db.blocks.get(&block(20)).unwrap().applied);
-        assert!(block_state_db.blocks.get(&block(19)).unwrap().applied);
-        assert!(block_state_db.blocks.get(&block(18)).unwrap().applied);
+        assert!(!block_state_db.blocks.contains_key(&block(19)));
+        assert!(!block_state_db.blocks.contains_key(&block(18)));
 
         // mark pipeline - should remove all intervals now
         pipeline.block_applied(&block(20), &block_state_db);
@@ -3254,6 +3288,109 @@ mod tests {
         assert!(missing_block_operations.is_empty());
     }
 
+    #[test]
+    fn test_bootstrap_state_shift_interval_with_shrink_to_applied_block() {
+        // common shared db
+        let mut block_state_db = BlockStateDb::new(50);
+
+        // genesis
+        let last_applied1 = block(0);
+        // history blocks
+        let history1: Vec<BlockHash> = vec![block(2)];
+
+        // create pipeline1
+        let mut pipeline1 =
+            BranchState::new(last_applied1.clone(), history1, 20, &mut block_state_db);
+        assert_eq!(pipeline1.intervals.len(), 1);
+        assert_interval(&pipeline1.intervals[0], (block(0), block(2)));
+        assert_eq!(2, block_state_db.blocks.len());
+
+        // download all
+        block_state_db.update_block(
+            &block(2),
+            block(1),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: true,
+                applied: false,
+            },
+        );
+        block_state_db.update_block(
+            &block(1),
+            block(0),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: true,
+                applied: false,
+            },
+        );
+        block_state_db.mark_block_applied(&block(2));
+        pipeline1.block_applied(&block(2), &block_state_db);
+        assert!(pipeline1.is_done());
+        assert_eq!(block_state_db.blocks.len(), 1);
+        assert!(block_state_db.blocks.contains_key(&block(2)));
+
+        // create pipeline2
+        let last_applied2 = block(0);
+        let history2: Vec<BlockHash> = vec![block(5), block(13), block(15), block(20)];
+        let mut pipeline2 =
+            BranchState::new(last_applied2.clone(), history2, 20, &mut block_state_db);
+        assert_eq!(pipeline2.intervals.len(), 4);
+        assert_interval(&pipeline2.intervals[0], (block(0), block(5)));
+        assert_interval(&pipeline2.intervals[1], (block(5), block(13)));
+        assert_interval(&pipeline2.intervals[2], (block(13), block(15)));
+        assert_interval(&pipeline2.intervals[3], (block(15), block(20)));
+
+        // download
+        block_state_db.update_block(
+            &block(5),
+            block(4),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: true,
+                applied: false,
+            },
+        );
+        block_state_db.update_block(
+            &block(4),
+            block(3),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: true,
+                applied: false,
+            },
+        );
+        block_state_db.update_block(
+            &block(3),
+            block(2),
+            InnerBlockState {
+                block_downloaded: true,
+                operations_downloaded: true,
+                applied: false,
+            },
+        );
+
+        // collect next missing with sift
+        let mut missing_block_headers = Vec::new();
+        pipeline2.collect_next_block_headers_to_download(
+            10,
+            &cfg_max_interval_ahead(10),
+            &HashSet::default(),
+            &mut missing_block_headers,
+            &block_state_db,
+        );
+        assert_eq!(missing_block_headers.len(), 3);
+        assert_eq!(missing_block_headers[0].as_ref(), &block(13));
+        assert_eq!(missing_block_headers[1].as_ref(), &block(15));
+        assert_eq!(missing_block_headers[2].as_ref(), &block(20));
+
+        assert_eq!(pipeline2.intervals[0].blocks.len(), 4);
+        assert_eq!(pipeline2.intervals[0].blocks[0].as_ref(), &block(2));
+        assert_eq!(pipeline2.intervals[0].blocks[1].as_ref(), &block(3));
+        assert_eq!(pipeline2.intervals[0].blocks[2].as_ref(), &block(4));
+        assert_eq!(pipeline2.intervals[0].blocks[3].as_ref(), &block(5));
+    }
+
     fn assert_interval(
         tested: &BranchInterval,
         (expected_left, expected_right): (BlockHash, BlockHash),
@@ -3263,7 +3400,9 @@ mod tests {
         assert_eq!(tested.blocks[1].as_ref(), &expected_right);
     }
 
-    fn cfg_max_interval_ahead(max_interval_ahead_for_blocks: u8) -> PeerBranchBootstrapperConfiguration {
+    fn cfg_max_interval_ahead(
+        max_interval_ahead_for_blocks: u8,
+    ) -> PeerBranchBootstrapperConfiguration {
         PeerBranchBootstrapperConfiguration::new(
             Duration::from_secs(1),
             Duration::from_secs(1),
