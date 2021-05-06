@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y libssl-dev
 # Checkout and compile tezedge source code
 ARG tezedge_git="https://github.com/tezedge/tezedge.git"
 ARG rust_toolchain="nightly-2020-12-31"
-ARG SOURCE_BRANCH
+ARG SOURCE_BRANCH=newer-context-demo
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain ${rust_toolchain} -y
 ENV PATH=/home/appuser/.cargo/bin:$PATH
 ENV RUST_BACKTRACE=1
