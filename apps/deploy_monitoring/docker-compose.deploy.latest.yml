@@ -19,7 +19,7 @@ services:
       - "11001:11001/udp"  # debugger syslog port for tezos node
 
   tezedge-node:
-    image: simplestakingcom/tezedge:latest
+    image: tezedge:timings
     command: ["--network", "${TEZOS_NETWORK}", "--actions-store-backend", "file", "--log", "terminal", "file", "--log-file", "/tmp/tezedge/tezedge.log"]
     logging:
       # Produce syslogs instead of terminal logs
