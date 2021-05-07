@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y libssl-dev libsqlite3-dev
 # Checkout and compile tezedge source code
 ARG tezedge_git="https://github.com/tezedge/tezedge.git"
 ARG rust_toolchain="nightly-2020-12-31"
-ARG SOURCE_BRANCH=new-context-demo
+ARG SOURCE_BRANCH=new-context-demo-rebased-on-master
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain ${rust_toolchain} -y
 ENV PATH=/home/appuser/.cargo/bin:$PATH
 ENV RUST_BACKTRACE=1
