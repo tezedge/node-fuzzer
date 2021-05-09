@@ -128,7 +128,7 @@ pub(crate) fn make_context_stats() -> Result<ContextStats, failure::Error> {
 }
 
 fn make_context_stats_impl(sql: &Connection) -> Result<ContextStats, failure::Error> {
-    let mut stmt = sql.prepare("SELECT name, key_root, tezedge_time FROM actions WHERE block_id IS NOT NULL;")?;
+    let mut stmt = sql.prepare("SELECT name, key_root, irmin_time FROM actions WHERE block_id IS NOT NULL;")?;
 
     let mut rows = stmt.query([])?;
 
@@ -145,7 +145,7 @@ fn make_context_stats_impl(sql: &Connection) -> Result<ContextStats, failure::Er
             _ => continue,
         };
 
-        let tezedge_time: f64 = row.get(2)?;
+        let irmin_time: f64 = row.get(2)?;
 
         let entry = match map.get_mut(root) {
             Some(entry) => entry,
@@ -167,7 +167,7 @@ fn make_context_stats_impl(sql: &Connection) -> Result<ContextStats, failure::Er
             _ => continue,
         };
 
-        let time = match tezedge_time {
+        let time = match irmin_time {
             t if t < 0.00001 => &mut range_stats.one_to_ten_us,
             t if t < 0.0001 => &mut range_stats.ten_to_one_hundred_us,
             t if t < 0.001 => &mut range_stats.one_hundred_us_to_one_ms,
@@ -180,8 +180,8 @@ fn make_context_stats_impl(sql: &Connection) -> Result<ContextStats, failure::Er
         };
 
         time.count = time.count.saturating_add(1);
-        time.total_time += tezedge_time;
-        time.max_time = time.max_time.max(tezedge_time);
+        time.total_time += irmin_time;
+        time.max_time = time.max_time.max(irmin_time);
     }
 
     for action in map.values_mut() {
@@ -217,9 +217,9 @@ fn make_block_stats_impl(
         SELECT
           key_root,
           name,
-          total(tezedge_time),
-          count(tezedge_time),
-          max(tezedge_time)
+          total(irmin_time),
+          count(irmin_time),
+          max(irmin_time)
         FROM
           actions
         WHERE
@@ -330,7 +330,7 @@ mod tests {
         sql.execute(
             "
         INSERT INTO actions
-          (name, key_root, key, irmin_time, tezedge_time, block_id, operation_id, context_id)
+          (name, key_root, key, irmin_time, irmin_time, block_id, operation_id, context_id)
         VALUES
           ('mem', 'a' ,'a/b/c', 1.2, 1.3, 1, NULL, NULL),
           ('mem', 'a' ,'a/b/d', 5.2, 5.3, 1, NULL, NULL),
