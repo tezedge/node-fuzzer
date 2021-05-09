@@ -75,7 +75,7 @@ services:
       - "18733:18733"     # node RPC port
 
   explorer:
-    image: simplestakingcom/tezedge-explorer:latest
+    image: tezedge-explorer:timings
     environment:
       - SANDBOX=http://${HOSTNAME}.dev.tezedge.com:3030
       - DEBUGGER=http://${HOSTNAME}.dev.tezedge.com:17732
