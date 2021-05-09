@@ -8,7 +8,8 @@ use once_cell::sync::Lazy;
 use rusqlite::{named_params, Batch, Connection, Error as SQLError};
 use tezos_api::ocaml_conv::{OCamlBlockHash, OCamlContextHash, OCamlOperationHash};
 
-const DB_PATH: &str = "context_stats.db";
+// FIXME: make this configurable
+const DB_PATH: &str = "/tmp/tezedge/context_stats.db";
 
 pub fn set_block(rt: &OCamlRuntime, block_hash: OCamlRef<Option<OCamlBlockHash>>) {
     let block_hash: Option<BlockHash> = block_hash.to_rust(rt);

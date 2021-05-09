@@ -3,7 +3,8 @@ use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
 
-const DB_PATH: &str = "context_stats.db";
+// FIXME: make this configurable
+const DB_PATH: &str = "/tmp/tezedge/context_stats.db";
 
 #[derive(Debug, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
