@@ -14,6 +14,11 @@ use slog::*;
 
 use tezos_context::channel;
 
+extern crate jemallocator;
+
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 fn create_logger(log_level: Level, endpoint_name: String) -> Logger {
     let drain = slog_async::Async::new(
         slog_term::FullFormat::new(slog_term::TermDecorator::new().build())

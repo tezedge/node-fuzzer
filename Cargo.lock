@@ -2827,6 +2827,7 @@ dependencies = [
  "ctrlc",
  "failure",
  "failure_derive",
+ "jemallocator",
  "slog",
  "slog-async",
  "slog-term",
