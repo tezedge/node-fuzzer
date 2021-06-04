@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     convert::TryInto,
     path::PathBuf,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -15,6 +15,7 @@ use rusqlite::{named_params, Batch, Connection, Error as SQLError};
 use serde::Serialize;
 
 pub const FILENAME_DB: &str = "context_stats.db";
+pub const FILENAME_DB_BACKUP: &str = "context_stats.db-bak";
 
 #[derive(Debug)]
 pub enum ActionKind {
@@ -582,27 +583,34 @@ impl Timing {
             (Some(root), Some(key_id))
         };
 
-        let mut stmt = self.sql.prepare_cached(
+        let current_block_id = self
+            .current_block
+            .as_ref()
+            .map(|(id, _)| id.parse::<i64>().unwrap_or(-1))
+            .unwrap_or(-1);
+
+        // Skip storing actions from before Delphi (first block = 1,212,417) to keep the db small
+        if current_block_id > 1_212_400 {
+            let mut stmt = self.sql.prepare_cached(
             "
         INSERT INTO actions
           (name, key_root, key_id, irmin_time, tezedge_time, block_id, operation_id, context_id)
         VALUES
           (:name, :key_root, :key_id, :irmin_time, :tezedge_time, :block_id, :operation_id, :context_id);
             "
-        )?;
+                )?;
 
-        stmt.execute(named_params! {
-            ":name": action_name,
-            ":key_root": &root,
-            ":key_id": &key_id,
-            ":irmin_time": &action.irmin_time,
-            ":tezedge_time": &action.tezedge_time,
-            ":block_id": block_id,
-            ":operation_id": operation_id,
-            ":context_id": context_id
-        })?;
-
-        drop(stmt);
+            stmt.execute(named_params! {
+                ":name": action_name,
+                ":key_root": &root,
+                ":key_id": &key_id,
+                ":irmin_time": &action.irmin_time,
+                ":tezedge_time": &action.tezedge_time,
+                ":block_id": block_id,
+                ":operation_id": operation_id,
+                ":context_id": context_id
+            })?;
+        }
 
         self.nactions = self.nactions.saturating_add(1);
 
@@ -958,7 +966,19 @@ impl Timing {
 
                 path.push(FILENAME_DB);
 
-                std::fs::remove_file(&path).ok();
+                // If the file exists, move it and create a new one
+                if path.as_path().is_file() {
+                    let timestamp = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    let mut backup_path = path.clone();
+                    backup_path.set_file_name(format!("{}-{}", FILENAME_DB_BACKUP, timestamp));
+                    // We don't want to override an old backup file
+                    if !backup_path.as_path().is_file() {
+                        std::fs::rename(&path, &backup_path).ok();
+                    }
+                }
                 Connection::open(&path)?
             }
             None => Connection::open_in_memory()?,
