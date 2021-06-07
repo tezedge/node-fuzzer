@@ -27,7 +27,8 @@ pub async fn launch_stack(compose_file_path: &PathBuf, log: &Logger, tezedge_onl
     // info!(log, "Memprof is running");
 
     info!(log, "Tezedge node is starting");
-    start_with_compose(compose_file_path, TezedgeNode::NAME, "tezedge-node");
+    let output = start_with_compose(compose_file_path, TezedgeNode::NAME, "tezedge-node");
+    info!(log, "OUTPUT={:?}", output);
     wait_for_start(&format!(
         "http://localhost:{}/chains/main/blocks/head/header",
         TEZEDGE_PORT
