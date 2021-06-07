@@ -45,7 +45,7 @@ COPY --from=build-env /home/appuser/tezedge/tezos/sys/lib_tezos/artifacts/saplin
 COPY --from=build-env /home/appuser/tezedge/tezos/sys/lib_tezos/artifacts/sapling-output.params /
 
 # Default entry point runs node with default config + several default values, which can be overriden by CMD
-ENTRYPOINT [ "/light-node", "--config-file=/tezedge.config", "--p2p-port=9732", "--rpc-port=18732", "--websocket-address=0.0.0.0:4927", "--init-sapling-spend-params-file=/sapling-spend.params", "--init-sapling-output-params-file=/sapling-output.params"]
+ENTRYPOINT [ "/light-node", "--config-file=/tezedge.config", "--p2p-port=9732", "--rpc-port=18732", "--websocket-address=0.0.0.0:4927", "--init-sapling-spend-params-file=/sapling-spend.params", "--init-sapling-output-params-file=/sapling-output.params", "--disable-mempool=true"]
 
 FROM light-node as sandbox
 
@@ -57,4 +57,4 @@ COPY --from=build-env /lib/x86_64-linux-gnu/libudev.so.1 /lib/x86_64-linux-gnu/l
 
 ENV TEZOS_CLIENT_UNSAFE_DISABLE_DISCLAIMER="Y"
 # Default entry point runs sandbox launcher with default config + several default values, which can be overriden by CMD
-ENTRYPOINT [ "/sandbox", "--light-node-path=/light-node", "--protocol-runner-path=/protocol-runner", "--tezos-client-path=/tezos-client", "--log-level=debug", "--sandbox-rpc-port=3030", "--init-sapling-spend-params-file=/sapling-spend.params", "--init-sapling-output-params-file=/sapling-output.params"]
+ENTRYPOINT [ "/sandbox", "--light-node-path=/light-node", "--protocol-runner-path=/protocol-runner", "--tezos-client-path=/tezos-client", "--log-level=debug", "--sandbox-rpc-port=3030", "--init-sapling-spend-params-file=/sapling-spend.params", "--init-sapling-output-params-file=/sapling-output.params", "--disable-mempool=true"]
