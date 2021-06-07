@@ -83,7 +83,11 @@ impl IndexApi<TezedgeContext> for TezedgeIndex {
         let hash = hasher.finish();
 
         let new_gc = self.new_gc.borrow();
-        let hash_id = new_gc.context_hashes.get(&hash).unwrap();
+        let hash_id = match new_gc.context_hashes.get(&hash) {
+            Some(id) => id,
+            None => return Ok(None)
+        };
+
         // let entry = new_gc.hashes.get_value(*hash_id).unwrap();
         // let entry: Entry = bincode::deserialize(entry)?;
 
