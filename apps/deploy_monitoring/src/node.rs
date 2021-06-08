@@ -143,7 +143,10 @@ pub trait Node {
         ))
         .await
         {
-            Ok(result) => result.json().await?,
+            Ok(result) => {
+                println!("HEAD_DATA RESULT={:?}", result);
+                result.json().await?
+            },
             Err(e) => bail!("GET header error: {}", e),
         };
 
@@ -153,7 +156,10 @@ pub trait Node {
         ))
         .await
         {
-            Ok(result) => result.json().await?,
+            Ok(result) => {
+                println!("HEAD_META RESULT={:?}", result);
+                result.json().await?
+            },
             Err(e) => bail!("GET header error: {}", e),
         };
 
