@@ -260,6 +260,8 @@ pub async fn spawn_node_stack(
         );
     }
 
+    println!("STORAGE_MAP={:?}", storage_map.iter().map(|(k, _)| k).collect::<Vec<_>>());
+
     info!(log, "Creating reosurces monitor");
     let resources_handle = start_resource_monitoring(
         &env,

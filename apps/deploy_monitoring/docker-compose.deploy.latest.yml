@@ -33,8 +33,8 @@ services:
   tezedge-node:
     image: tezedge:timings
     command: ["--network", "${TEZOS_NETWORK}", "--log", "terminal", "file", "--log-file", "/tmp/tezedge/tezedge.log", "--one-context", "--actions-store-backend", "none", "--peer-thresh-low", "30", "--peer-thresh-high", "45", "--disable-mempool"]
-    # depends_on:
-    #   - "tezedge-memprof"
+    depends_on:
+      - "tezedge-memprof"
     logging:
       # Produce syslogs instead of terminal logs
       driver: "syslog"

@@ -27,6 +27,8 @@ async fn main() {
     // parse and validate program arguments
     let env = configuration::DeployMonitoringEnvironment::from_args();
 
+    println!("ENV={:#?}", env);
+
     // create an slog logger
     let log = create_logger(env.log_level);
 

@@ -341,7 +341,7 @@ impl DeployMonitoringEnvironment {
         DeployMonitoringEnvironment {
             log_level: args
                 .value_of("log-level")
-                .unwrap_or("info")
+                .unwrap_or("debug")
                 .parse::<slog::Level>()
                 .expect("Was expecting one value from slog::Level"),
             compose_file_path: args
