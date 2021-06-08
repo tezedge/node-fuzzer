@@ -180,7 +180,7 @@ pub trait Node {
                 .ok_or_else(|| format_err!("Protocol is not u64"))?,
             0,
             0,
-            0,
+            "".to_string(),
             // head_metadata["level"]["cycle_position"]
             //     .as_u64()
             //     .unwrap_or(0),
