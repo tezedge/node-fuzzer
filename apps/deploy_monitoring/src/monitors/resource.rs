@@ -212,26 +212,26 @@ impl ResourceMonitor {
 
         system.refresh_all();
 
-        println!("OK");
+        // println!("OK");
 
         for (node_tag, resource_storage) in resource_utilization {
             let node_resource_measurement = if node_tag == &"tezedge" {
-                println!("Taking measurement");
+                // println!("Taking measurement");
                 let current_head_info = TezedgeNode::collect_head_data(TEZEDGE_PORT).await.unwrap_or_default();
-                println!("Current head ok {:?}", current_head_info);
+                // println!("Current head ok {:?}", current_head_info);
                 let tezedge_node = TezedgeNode::collect_memory_data(TEZEDGE_PORT).await?;
-                println!("tezedge_node ok {:?}", tezedge_node);
+                // println!("tezedge_node ok {:?}", tezedge_node);
                 let protocol_runners =
                     TezedgeNode::collect_protocol_runners_memory_stats(TEZEDGE_PORT).await?;
-                println!("protocol_runners ok {:?}", protocol_runners);
+                // println!("protocol_runners ok {:?}", protocol_runners);
                 let tezedge_disk = TezedgeNode::collect_disk_data()?;
-                println!("tezedge_disk ok {:?}", tezedge_disk);
+                // println!("tezedge_disk ok {:?}", tezedge_disk);
 
                 let tezedge_cpu = TezedgeNode::collect_cpu_data(system, "light-node")?;
-                println!("tezedge_cpu ok {:?}", tezedge_cpu);
+                // println!("tezedge_cpu ok {:?}", tezedge_cpu);
                 let protocol_runners_cpu =
                     TezedgeNode::collect_cpu_data(system, "protocol-runner")?;
-                println!("protocol_runners_cpu ok {:?}", protocol_runners_cpu);
+                // println!("protocol_runners_cpu ok {:?}", protocol_runners_cpu);
                 let resources = ResourceUtilization {
                     timestamp: chrono::Local::now().timestamp(),
                     memory: MemoryStats {
