@@ -217,7 +217,7 @@ impl ResourceMonitor {
         for (node_tag, resource_storage) in resource_utilization {
             let node_resource_measurement = if node_tag == &"tezedge" {
                 println!("Taking measurement");
-                let current_head_info = TezedgeNode::collect_head_data(TEZEDGE_PORT).await?;
+                let current_head_info = TezedgeNode::collect_head_data(TEZEDGE_PORT).await.unwrap_or_default();
                 println!("Current head ok {:?}", current_head_info);
                 let tezedge_node = TezedgeNode::collect_memory_data(TEZEDGE_PORT).await?;
                 println!("tezedge_node ok {:?}", tezedge_node);
