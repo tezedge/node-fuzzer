@@ -762,6 +762,8 @@ impl ProtocolController {
         patch_context: Option<PatchContext>,
         context_stats_db_path: Option<PathBuf>,
     ) -> Result<InitProtocolContextResult, ProtocolServiceError> {
+        println!("INIT={:?}", storage);
+
         // try to check if was at least one write success, other words, if context was already created on file system
         {
             // lock
