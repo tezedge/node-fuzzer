@@ -884,6 +884,11 @@ impl ProtocolController {
         &self,
     ) -> Result<InitProtocolContextResult, ProtocolServiceError> {
         self.change_runtime_configuration(self.configuration.runtime_configuration.clone())?;
+
+        println!("INIT FOR READ STORAGE={:#?}", self.configuration.storage.clone());
+        println!("INIT FOR READ ENV={:#?}", self.configuration.environment);
+        println!("INIT FOR READ ENABLE_TEST_CHAIN={:#?}", self.configuration.enable_testchain);
+
         self.init_protocol_context(
             self.configuration.storage.clone(),
             &self.configuration.environment,
