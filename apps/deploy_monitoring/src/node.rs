@@ -150,18 +150,18 @@ pub trait Node {
             Err(e) => bail!("GET header error: {}", e),
         };
 
-        let head_metadata: serde_json::Value = match reqwest::get(&format!(
-            "http://localhost:{}/chains/main/blocks/head/metadata",
-            port
-        ))
-        .await
-        {
-            Ok(result) => {
-                println!("HEAD_META RESULT={:?}", result);
-                result.json().await?
-            },
-            Err(e) => bail!("GET header error: {}", e),
-        };
+        // let head_metadata: serde_json::Value = match reqwest::get(&format!(
+        //     "http://localhost:{}/chains/main/blocks/head/metadata",
+        //     port
+        // ))
+        // .await
+        // {
+        //     Ok(result) => {
+        //         println!("HEAD_META RESULT={:?}", result);
+        //         result.json().await?
+        //     },
+        //     Err(e) => bail!("GET header error: {}", e),
+        // };
 
         Ok(NodeInfo::new(
             head_data["level"]
@@ -178,16 +178,19 @@ pub trait Node {
             head_data["proto"]
                 .as_u64()
                 .ok_or_else(|| format_err!("Protocol is not u64"))?,
-            head_metadata["level"]["cycle_position"]
-                .as_u64()
-                .unwrap_or(0),
-            head_metadata["level"]["voting_period_position"]
-                .as_u64()
-                .unwrap_or(0),
-            head_metadata["voting_period_kind"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            0,
+            0,
+            0,
+            // head_metadata["level"]["cycle_position"]
+            //     .as_u64()
+            //     .unwrap_or(0),
+            // head_metadata["level"]["voting_period_position"]
+            //     .as_u64()
+            //     .unwrap_or(0),
+            // head_metadata["voting_period_kind"]
+            //     .as_str()
+            //     .unwrap_or("")
+            //     .to_string(),
         ))
 
         // Ok(head_data)
