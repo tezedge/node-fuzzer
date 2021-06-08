@@ -29,6 +29,8 @@ pub async fn get_measurements(
 ) -> Result<impl warp::Reply, reject::Rejection> {
     let storage = measurements_storage.read().unwrap();
 
+    println!("STORAGE_LEN={:?} LIMIT={:?} OFFSET={:?} EVERY_NTH={:?}", storage.len(), options.limit, options.offset, options.every_nth);
+
     let ret: VecDeque<ResourceUtilization> = if let Some(every_nth) = options.every_nth {
         storage
             .clone()
