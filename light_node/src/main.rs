@@ -190,16 +190,16 @@ fn block_on_actors(
     info!(log, "Initializing protocol runners... (4/5)");
 
     // create pool for ffi protocol runner connections (used just for readonly context)
-    let tezos_readonly_api_pool = Arc::new(
-        create_tezos_readonly_api_pool(
-            "tezos_readonly_api_pool",
-            env.ffi.tezos_readonly_api_pool.clone(),
-            &env,
-            tezos_env.clone(),
-            log.clone(),
-        )
-        .expect("Failed to initialize read-only API pool"),
-    );
+    // let tezos_readonly_api_pool = Arc::new(
+    //     create_tezos_readonly_api_pool(
+    //         "tezos_readonly_api_pool",
+    //         env.ffi.tezos_readonly_api_pool.clone(),
+    //         &env,
+    //         tezos_env.clone(),
+    //         log.clone(),
+    //     )
+    //     .expect("Failed to initialize read-only API pool"),
+    // );
     let tezos_readonly_prevalidation_api_pool = Arc::new(
         create_tezos_readonly_api_pool(
             "tezos_readonly_prevalidation_api",
@@ -210,16 +210,16 @@ fn block_on_actors(
         )
         .expect("Failed to initialize read-only prevalidation API pool"),
     );
-    let tezos_without_context_api_pool = Arc::new(
-        create_tezos_without_context_api_pool(
-            "tezos_without_context_api_pool",
-            env.ffi.tezos_without_context_api_pool.clone(),
-            &env,
-            tezos_env.clone(),
-            log.clone(),
-        )
-        .expect("Failed to initialize API pool without context"),
-    );
+    // let tezos_without_context_api_pool = Arc::new(
+    //     create_tezos_without_context_api_pool(
+    //         "tezos_without_context_api_pool",
+    //         env.ffi.tezos_without_context_api_pool.clone(),
+    //         &env,
+    //         tezos_env.clone(),
+    //         log.clone(),
+    //     )
+    //     .expect("Failed to initialize API pool without context"),
+    // );
 
     // pool and event server dedicated for applying blocks to chain
     let context_actions_event_server =
@@ -330,17 +330,17 @@ fn block_on_actors(
         info!(log, "Mempool disabled");
     } else {
         info!(log, "Mempool enabled");
-        let _ = MempoolPrevalidator::actor(
-            &actor_system,
-            shell_channel.clone(),
-            mempool_channel.clone(),
-            &persistent_storage,
-            current_mempool_state_storage.clone(),
-            init_storage_data.chain_id.clone(),
-            tezos_readonly_api_pool.clone(),
-            log.clone(),
-        )
-        .expect("Failed to create mempool prevalidator");
+        // let _ = MempoolPrevalidator::actor(
+        //     &actor_system,
+        //     shell_channel.clone(),
+        //     mempool_channel.clone(),
+        //     &persistent_storage,
+        //     current_mempool_state_storage.clone(),
+        //     init_storage_data.chain_id.clone(),
+        //     tezos_readonly_api_pool.clone(),
+        //     log.clone(),
+        // )
+        // .expect("Failed to create mempool prevalidator");
     }
     let websocket_handler = WebsocketHandler::actor(
         &actor_system,
@@ -367,9 +367,9 @@ fn block_on_actors(
         &persistent_storage,
         current_mempool_state_storage,
         &tezedge_context,
-        tezos_readonly_api_pool.clone(),
+        // tezos_readonly_api_pool.clone(),
         tezos_readonly_prevalidation_api_pool.clone(),
-        tezos_without_context_api_pool.clone(),
+        // tezos_without_context_api_pool.clone(),
         tezos_env.clone(),
         Arc::new(shell_compatibility_version.to_network_version()),
         &init_storage_data,
@@ -433,9 +433,9 @@ fn block_on_actors(
         };
 
         info!(log, "Shutting down protocol runner pools (3/5)");
-        drop(tezos_readonly_api_pool);
+        // drop(tezos_readonly_api_pool);
         drop(tezos_readonly_prevalidation_api_pool);
-        drop(tezos_without_context_api_pool);
+        // drop(tezos_without_context_api_pool);
         drop(tezos_writeable_api_pool);
         debug!(log, "Protocol runners completed");
 

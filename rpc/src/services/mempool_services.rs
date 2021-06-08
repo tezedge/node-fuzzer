@@ -352,13 +352,14 @@ pub fn inject_block(
 
     // compute the paths for each validation passes
     let paths = if let Some(vps) = validation_passes.as_ref() {
-        let response = env
-            .tezos_without_context_api()
-            .pool
-            .get()?
-            .api
-            .compute_path(vps.try_into()?)?;
-        Some(response.operations_hashes_path)
+        None
+        // let response = env
+        //     .tezos_without_context_api()
+        //     .pool
+        //     .get()?
+        //     .api
+        //     .compute_path(vps.try_into()?)?;
+        // Some(response.operations_hashes_path)
     } else {
         None
     };

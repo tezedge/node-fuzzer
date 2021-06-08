@@ -66,12 +66,12 @@ pub struct RpcServiceEnvironment {
     #[get = "pub(crate)"]
     main_chain_id: ChainId,
 
-    #[get = "pub(crate)"]
-    tezos_readonly_api: Arc<TezosApiConnectionPool>,
+    // #[get = "pub(crate)"]
+    // tezos_readonly_api: Arc<TezosApiConnectionPool>,
     #[get = "pub(crate)"]
     tezos_readonly_prevalidation_api: Arc<TezosApiConnectionPool>,
-    #[get = "pub(crate)"]
-    tezos_without_context_api: Arc<TezosApiConnectionPool>,
+    // #[get = "pub(crate)"]
+    // tezos_without_context_api: Arc<TezosApiConnectionPool>,
     #[get = "pub(crate)"]
     context_stats_db_path: Option<PathBuf>,
 
@@ -91,9 +91,9 @@ impl RpcServiceEnvironment {
         current_mempool_state_storage: CurrentMempoolStateStorageRef,
         // TODO - TE-261: this will not be available anymore
         tezedge_context: &TezedgeContext,
-        tezos_readonly_api: Arc<TezosApiConnectionPool>,
+        // tezos_readonly_api: Arc<TezosApiConnectionPool>,
         tezos_readonly_prevalidation_api: Arc<TezosApiConnectionPool>,
-        tezos_without_context_api: Arc<TezosApiConnectionPool>,
+        // tezos_without_context_api: Arc<TezosApiConnectionPool>,
         main_chain_id: ChainId,
         main_chain_genesis_hash: BlockHash,
         state: RpcCollectedStateRef,
@@ -115,9 +115,9 @@ impl RpcServiceEnvironment {
             main_chain_genesis_hash,
             state,
             log: log.clone(),
-            tezos_readonly_api,
+            // tezos_readonly_api,
             tezos_readonly_prevalidation_api,
-            tezos_without_context_api,
+            // tezos_without_context_api,
             one_context,
             context_stats_db_path,
         }

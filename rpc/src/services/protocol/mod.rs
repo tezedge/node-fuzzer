@@ -481,15 +481,17 @@ pub(crate) fn call_protocol_rpc(
     let request =
         create_protocol_rpc_request(chain_param, chain_id, block_hash, rpc_request, &env)?;
 
-    // TODO: retry?
-    let response = env
-        .tezos_readonly_api()
-        .pool
-        .get()?
-        .api
-        .call_protocol_rpc(request)?;
+    unimplemented!()
 
-    handle_rpc_response(&response, context_path)
+    // TODO: retry?
+    // let response = env
+    //     .tezos_readonly_api()
+    //     .pool
+    //     .get()?
+    //     .api
+    //     .call_protocol_rpc(request)?;
+
+    // handle_rpc_response(&response, context_path)
 }
 
 pub(crate) fn preapply_operations(
@@ -502,15 +504,17 @@ pub(crate) fn preapply_operations(
     let request =
         create_protocol_rpc_request(chain_param, chain_id, block_hash, rpc_request, &env)?;
 
-    // TODO: retry?
-    let response = env
-        .tezos_readonly_api()
-        .pool
-        .get()?
-        .api
-        .helpers_preapply_operations(request)?;
+    unimplemented!()
 
-    Ok(serde_json::from_str(&response.body)?)
+    // // TODO: retry?
+    // let response = env
+    //     .tezos_readonly_api()
+    //     .pool
+    //     .get()?
+    //     .api
+    //     .helpers_preapply_operations(request)?;
+
+    // Ok(serde_json::from_str(&response.body)?)
 }
 
 pub(crate) fn preapply_block(
@@ -552,15 +556,17 @@ pub(crate) fn preapply_block(
         predecessor_ops_metadata_hash,
     };
 
-    // TODO: retry?
-    let response = env
-        .tezos_readonly_api()
-        .pool
-        .get()?
-        .api
-        .helpers_preapply_block(request)?;
+    unimplemented!()
 
-    Ok(serde_json::from_str(&response.body)?)
+    // // TODO: retry?
+    // let response = env
+    //     .tezos_readonly_api()
+    //     .pool
+    //     .get()?
+    //     .api
+    //     .helpers_preapply_block(request)?;
+
+    // Ok(serde_json::from_str(&response.body)?)
 }
 
 fn create_protocol_rpc_request(

@@ -202,41 +202,41 @@ pub(crate) fn get_blocks(
     }?
     .into_iter()
     .map(|(block_header, block_json_data)| {
-        if let Some(block_additional_data) = block_meta_storage.get_additional_data(&block_hash)? {
-            let response = env
-                .tezos_readonly_api()
-                .pool
-                .get()?
-                .api
-                .apply_block_result_metadata(
-                    block_header.header.context().clone(),
-                    block_json_data.block_header_proto_metadata_bytes,
-                    block_additional_data.max_operations_ttl().into(),
-                    block_additional_data.protocol_hash,
-                    block_additional_data.next_protocol_hash,
-                )?;
+        // if let Some(block_additional_data) = block_meta_storage.get_additional_data(&block_hash)? {
+        //     let response = env
+        //         .tezos_readonly_api()
+        //         .pool
+        //         .get()?
+        //         .api
+        //         .apply_block_result_metadata(
+        //             block_header.header.context().clone(),
+        //             block_json_data.block_header_proto_metadata_bytes,
+        //             block_additional_data.max_operations_ttl().into(),
+        //             block_additional_data.protocol_hash,
+        //             block_additional_data.next_protocol_hash,
+        //         )?;
 
-            let metadata: BlockMetadata = serde_json::from_str(&response).unwrap_or_default();
-            let cycle_position = if let Some(level) = metadata.get("level") {
-                level["cycle_position"].as_i64()
-            } else if let Some(level) = metadata.get("level_info") {
-                level["cycle_position"].as_i64()
-            } else {
-                None
-            };
+        //     let metadata: BlockMetadata = serde_json::from_str(&response).unwrap_or_default();
+        //     let cycle_position = if let Some(level) = metadata.get("level") {
+        //         level["cycle_position"].as_i64()
+        //     } else if let Some(level) = metadata.get("level_info") {
+        //         level["cycle_position"].as_i64()
+        //     } else {
+        //         None
+        //     };
 
-            Ok(SlimBlockData {
-                level: block_header.header.level(),
-                block_hash: block_header.hash.to_base58_check(),
-                timestamp: block_header.header.timestamp().to_string(),
-                cycle_position,
-            })
-        } else {
+        //     Ok(SlimBlockData {
+        //         level: block_header.header.level(),
+        //         block_hash: block_header.hash.to_base58_check(),
+        //         timestamp: block_header.header.timestamp().to_string(),
+        //         cycle_position,
+        //     })
+        // } else {
             bail!(
                 "No additional data found for block_hash: {}",
                 block_hash.to_base58_check()
             )
-        }
+        // }
     })
     .filter_map(Result::ok)
     .collect::<Vec<SlimBlockData>>();

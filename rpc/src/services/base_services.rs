@@ -90,20 +90,23 @@ fn convert_block_metadata(
     env: &RpcServiceEnvironment,
 ) -> Result<BlockMetadata, failure::Error> {
     // TODO: TE-521 - rewrite encoding part to rust
-    let response = env
-        .tezos_readonly_api()
-        .pool
-        .get()?
-        .api
-        .apply_block_result_metadata(
-            context_hash,
-            block_header_proto_metadata_bytes,
-            block_additional_data.max_operations_ttl().into(),
-            block_additional_data.protocol_hash.clone(),
-            block_additional_data.next_protocol_hash.clone(),
-        )?;
 
-    serde_json::from_str::<BlockMetadata>(&response).map_err(|e| e.into())
+    Err(failure::format_err!("Unimplemented"))
+
+    // let response = env
+    //     .tezos_readonly_api()
+    //     .pool
+    //     .get()?
+    //     .api
+    //     .apply_block_result_metadata(
+    //         context_hash,
+    //         block_header_proto_metadata_bytes,
+    //         block_additional_data.max_operations_ttl().into(),
+    //         block_additional_data.protocol_hash.clone(),
+    //         block_additional_data.next_protocol_hash.clone(),
+    //     )?;
+
+    // serde_json::from_str::<BlockMetadata>(&response).map_err(|e| e.into())
 }
 
 /// Get information about block header
@@ -313,20 +316,22 @@ fn convert_block_operations_metadata(
     env: &RpcServiceEnvironment,
 ) -> Result<BlockOperations, failure::Error> {
     // TODO: TE-521 - rewrite encoding part to rust
-    let response = env
-        .tezos_readonly_api()
-        .pool
-        .get()?
-        .api
-        .apply_block_operations_metadata(
-            chain_id,
-            ApplyBlockRequest::convert_operations(operations),
-            operations_proto_metadata_bytes,
-            block_additional_data.protocol_hash.clone(),
-            block_additional_data.next_protocol_hash.clone(),
-        )?;
+    Err(failure::format_err!("Unimplemented"))
 
-    serde_json::from_str::<BlockOperations>(&response).map_err(|e| e.into())
+    // let response = env
+    //     .tezos_readonly_api()
+    //     .pool
+    //     .get()?
+    //     .api
+    //     .apply_block_operations_metadata(
+    //         chain_id,
+    //         ApplyBlockRequest::convert_operations(operations),
+    //         operations_proto_metadata_bytes,
+    //         block_additional_data.protocol_hash.clone(),
+    //         block_additional_data.next_protocol_hash.clone(),
+    //     )?;
+
+    // serde_json::from_str::<BlockOperations>(&response).map_err(|e| e.into())
 }
 
 /// Extract all the operations included in the provided validation pass.
