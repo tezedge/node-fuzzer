@@ -1,12 +1,14 @@
 // Copyright (c) SimpleStaking and Tezedge Contributors
 // SPDX-License-Identifier: MIT
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{sync::atomic::{AtomicUsize, Ordering::Relaxed}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 
 use crypto::hash::{BlockHash, ContextHash, OperationHash};
 use ocaml_interop::*;
 use tezos_api::ocaml_conv::{OCamlBlockHash, OCamlContextHash, OCamlOperationHash};
 use tezos_timing::{Action, ActionKind, TimingMessage, TIMING_CHANNEL};
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn set_block(rt: &OCamlRuntime, block_hash: OCamlRef<Option<OCamlBlockHash>>) {
     let instant = Instant::now();
@@ -20,6 +22,10 @@ pub fn set_block(rt: &OCamlRuntime, block_hash: OCamlRef<Option<OCamlBlockHash>>
     } else {
         None
     };
+
+    if COUNTER.fetch_add(1, Relaxed) % 5 == 0 {
+        println!("TIMING pending message = {:?}", TIMING_CHANNEL.len());
+    }
 
     TIMING_CHANNEL
         .send(TimingMessage::SetBlock {
