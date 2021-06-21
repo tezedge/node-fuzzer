@@ -15,7 +15,7 @@ use riker::actors::*;
 use slog::{info, warn, Logger};
 
 use crypto::hash::{BlockHash, ChainId};
-use networking::PeerId;
+use networking::{PeerAddress, PeerId};
 use storage::BlockHeaderWithHash;
 use tezos_messages::p2p::encoding::block_header::Level;
 
@@ -33,7 +33,7 @@ type BlockRef = Arc<BlockHash>;
 /// BootstrapState helps to easily manage/mutate inner state
 pub struct BootstrapState {
     /// Holds peers info
-    pub(crate) peers: HashMap<ActorUri, PeerBootstrapState>,
+    pub(crate) peers: HashMap<PeerAddress, PeerBootstrapState>,
 
     /// Holds unique blocks cache, shared for all branch bootstraps to minimalize memory usage
     block_state_db: BlockStateDb,
@@ -59,8 +59,8 @@ impl BootstrapState {
         self.peers.len()
     }
 
-    pub fn clean_peer_data(&mut self, peer_actor_uri: &ActorUri) {
-        if let Some(mut state) = self.peers.remove(peer_actor_uri) {
+    pub fn clean_peer_data(&mut self, peer_address: &PeerAddress) {
+        if let Some(mut state) = self.peers.remove(peer_address) {
             state.branches.clear();
         }
     }
@@ -93,7 +93,7 @@ impl BootstrapState {
                         Err(e) => {
                             warn!(log, "Failed to resolve, if block response pending, for peer (so behave as ok)";
                                                 "reason" => format!("{}", e),
-                                                "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                                                "peer_ip" => peer_id.address.to_string());
                         }
                     }
                 }
@@ -111,7 +111,7 @@ impl BootstrapState {
                         Err(e) => {
                             warn!(log, "Failed to resolve, if block operations response pending, for peer (so behave as ok)";
                                                 "reason" => format!("{}", e),
-                                                "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                                                "peer_ip" => peer_id.address.to_string());
                         }
                     }
                 }
@@ -122,9 +122,9 @@ impl BootstrapState {
         for (peer_id, reason) in stalled_peers {
             warn!(log, "Disconnecting peer, because of stalled bootstrap pipeline";
                        "reason" => reason,
-                       "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                       "peer_ip" => peer_id.address.to_string());
 
-            self.clean_peer_data(peer_id.peer_ref.uri());
+            self.clean_peer_data(&peer_id.address);
             disconnect_peer(&peer_id);
         }
     }
@@ -139,7 +139,7 @@ impl BootstrapState {
                             warn!(log, "Peer's branch bootstrap contains failed block, so this branch bootstrap is removed";
                                "block_hash" => failed_block.to_base58_check(),
                                "to_level" => &branch.to_level,
-                               "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                               "peer_ip" => peer_id.address.to_string());
                             false
                         } else {
                             true
@@ -263,7 +263,7 @@ impl BootstrapState {
         } = self;
 
         // add branch to inner state
-        if let Some(peer_state) = peers.get_mut(peer_id.peer_ref.uri()) {
+        if let Some(peer_state) = peers.get_mut(&peer_id.address) {
             let mut was_merged = false;
             for branch in peer_state.branches.iter_mut() {
                 if branch.merge(&to_level, &missing_history, block_state_db) {
@@ -278,7 +278,7 @@ impl BootstrapState {
                 if peer_state.branches.len() >= max_bootstrap_branches_per_peer {
                     info!(log, "Peer has started already maximum ({}) branch pipelines, so we dont start new one", max_bootstrap_branches_per_peer;
                                     "to_level" => &to_level,
-                                    "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                                    "peer_ip" => peer_id.address.to_string());
                     return None;
                 }
 
@@ -302,7 +302,7 @@ impl BootstrapState {
             );
 
             self.peers.insert(
-                peer_id.peer_ref.uri().clone(),
+                peer_id.address,
                 PeerBootstrapState {
                     peer_id,
                     peer_queues,
@@ -325,7 +325,7 @@ impl BootstrapState {
         } = self;
 
         // find peer state
-        if let Some(peer_state) = peers.get_mut(peer_id.peer_ref.uri()) {
+        if let Some(peer_state) = peers.get_mut(&peer_id.address) {
             let mut was_merged = false;
             let to_level = block.header.level();
             let missing_history = vec![block.header.predecessor().clone(), block.hash.clone()];
@@ -357,7 +357,7 @@ impl BootstrapState {
             peer_queues,
             branches,
             ..
-        }) = peers.get_mut(&filter_peer.peer_ref.uri())
+        }) = peers.get_mut(&filter_peer.address)
         {
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
@@ -366,7 +366,7 @@ impl BootstrapState {
                 Ok(queued_and_capacity) => queued_and_capacity,
                 Err(e) => {
                     warn!(log, "Failed to get available blocks queue capacity for peer, so ignore this run for peer"; "reason" => e,
-                        "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                        "peer_ip" => peer_id.address.to_string());
                     return;
                 }
             };
@@ -394,7 +394,7 @@ impl BootstrapState {
                 data_requester.fetch_block_headers(missing_blocks, peer_id, &peer_queues)
             {
                 warn!(log, "Failed to schedule block headers for download from peer"; "reason" => e,
-                        "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                        "peer_ip" => peer_id.address.to_string());
             }
         }
     }
@@ -406,7 +406,7 @@ impl BootstrapState {
             peer_queues,
             branches,
             ..
-        }) = self.peers.get_mut(&filter_peer.peer_ref.uri())
+        }) = self.peers.get_mut(&filter_peer.address)
         {
             // check peers blocks queue
             let (already_queued, mut available_queue_capacity) = match peer_queues
@@ -415,7 +415,7 @@ impl BootstrapState {
                 Ok(queued_and_capacity) => queued_and_capacity,
                 Err(e) => {
                     warn!(log, "Failed to get available operations queue capacity for peer, so ignore this run for peer"; "reason" => e,
-                        "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                        "peer_ip" => peer_id.address.to_string());
                     return;
                 }
             };
@@ -447,7 +447,7 @@ impl BootstrapState {
                 },
             ) {
                 warn!(log, "Failed to schedule block operations for download from peer"; "reason" => e,
-                        "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                        "peer_ip" => peer_id.address.to_string());
             }
             // clear already downloaded
             already_downloaded
@@ -475,7 +475,7 @@ impl BootstrapState {
 
         if let Some(PeerBootstrapState {
             peer_id, branches, ..
-        }) = peers.get_mut(&filter_peer.peer_ref.uri())
+        }) = peers.get_mut(&filter_peer.address)
         {
             // check unprocessed downloaded intervals
             let mut branches_to_remove: HashSet<Level> = HashSet::default();
@@ -489,7 +489,7 @@ impl BootstrapState {
                 ) {
                     warn!(log, "Failed to schedule blocks for apply";
                                "reason" => error,
-                               "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                               "peer_ip" => peer_id.address.to_string());
                     branches_to_remove.insert(branch.to_level);
                 }
             }
@@ -500,7 +500,7 @@ impl BootstrapState {
                 if remove {
                     warn!(log, "Removing branch from peers branch bootstrap pipelines";
                            "to_level" => &branch.to_level,
-                           "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                           "peer_ip" => peer_id.address.to_string());
                 }
                 !remove
             });
@@ -569,7 +569,7 @@ impl BootstrapState {
         {
             // filter processing by peer (if requested)
             if let Some(filter_peer) = filter_peer.as_ref() {
-                if !filter_peer.peer_ref.eq(&peer_id.peer_ref) {
+                if !filter_peer.address.eq(&peer_id.address) {
                     continue;
                 }
             }
@@ -578,7 +578,7 @@ impl BootstrapState {
                     if branch.is_done() {
                         info!(log, "Finished branch bootstrapping process";
                             "to_level" => &branch.to_level,
-                            "peer_id" => peer_id.peer_id_marker.clone(), "peer_ip" => peer_id.peer_address.to_string(), "peer" => peer_id.peer_ref.name(), "peer_uri" => peer_id.peer_ref.uri().to_string());
+                            "peer_ip" => peer_id.address.to_string());
 
                         // send for peer just once
                         if !(*is_bootstrapped) {
