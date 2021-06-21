@@ -86,6 +86,12 @@ impl FromStr for PeerAddress {
     }
 }
 
+impl ToString for PeerAddress {
+    fn to_string(&self) -> String {
+        self.0.to_string()
+    }
+}
+
 impl From<SocketAddr> for PeerAddress {
     fn from(addr: SocketAddr) -> Self {
         Self(addr)
