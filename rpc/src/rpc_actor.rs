@@ -43,6 +43,7 @@ pub struct RpcServer {
     shell_channel: ShellChannelRef,
     state: RpcCollectedStateRef,
     env: Arc<RpcServiceEnvironment>,
+    tokio_executor: Handle,
 }
 
 impl RpcServer {
@@ -93,7 +94,12 @@ impl RpcServer {
 
         let actor_ref = sys.actor_of_props::<RpcServer>(
             Self::name(),
-            Props::new_args((shell_channel, shared_state, env.clone())),
+            Props::new_args((
+                shell_channel,
+                shared_state,
+                env.clone(),
+                tokio_executor.clone(),
+            )),
         )?;
 
         // spawn RPC JSON server
@@ -117,19 +123,22 @@ impl
         ShellChannelRef,
         RpcCollectedStateRef,
         Arc<RpcServiceEnvironment>,
+        Handle,
     )> for RpcServer
 {
     fn create_args(
-        (shell_channel, state, env): (
+        (shell_channel, state, env, tokio_executor): (
             ShellChannelRef,
             RpcCollectedStateRef,
             Arc<RpcServiceEnvironment>,
+            Handle,
         ),
     ) -> Self {
         Self {
             shell_channel,
             state,
             env,
+            tokio_executor,
         }
     }
 }
@@ -147,9 +156,9 @@ impl Actor for RpcServer {
 }
 
 async fn warm_up_rpc_cache(
-    chain_id: &ChainId,
-    block: &BlockHeaderWithHash,
-    env: &RpcServiceEnvironment,
+    chain_id: ChainId,
+    block: Arc<BlockHeaderWithHash>,
+    env: Arc<RpcServiceEnvironment>,
 ) {
     // Sync call: goes first because other calls re-use the cached result
     let _ = crate::services::base_services::get_additional_data(
@@ -160,13 +169,13 @@ async fn warm_up_rpc_cache(
 
     // Async calls
     let get_block_metadata =
-        crate::services::base_services::get_block_metadata(&chain_id, &block.hash, env);
+        crate::services::base_services::get_block_metadata(&chain_id, &block.hash, &env);
     let get_block = crate::services::base_services::get_block(&chain_id, &block.hash, &env);
     let get_block_operations_metadata =
         crate::services::base_services::get_block_operations_metadata(
             chain_id.clone(),
             &block.hash,
-            env,
+            &env,
         );
     let get_block_operation_hashes = crate::services::base_services::get_block_operation_hashes(
         chain_id.clone(),
@@ -178,7 +187,7 @@ async fn warm_up_rpc_cache(
         block.hash.clone(),
         &env.persistent_storage(),
     );
-    let _ = futures::join!(
+    let _ = tokio::join!(
         get_block_metadata,
         get_block,
         get_block_operations_metadata,
@@ -213,15 +222,23 @@ impl Receive<ShellChannelMsg> for RpcServer {
 
             // warm-up - calls where chain_id + block_hash
             if is_bootstrapped {
-                if let Err(err) = futures::executor::block_on(tokio::time::timeout(
-                    RPC_WARMUP_TIMEOUT,
-                    warm_up_rpc_cache(&chain_id, &block, &self.env),
-                )) {
-                    warn!(
-                        self.env.log(),
-                        "RPC warmup timeout after {:?}: {:?}", RPC_WARMUP_TIMEOUT, err
-                    );
-                }
+                let env = self.env.clone();
+                let block = block.clone();
+                let chain_id = chain_id.clone();
+                let log = env.log().clone();
+                self.tokio_executor.spawn(async move {
+                    if let Err(err) = tokio::time::timeout(
+                        RPC_WARMUP_TIMEOUT,
+                        warm_up_rpc_cache(chain_id, block, env),
+                    )
+                    .await
+                    {
+                        warn!(
+                            log,
+                            "RPC warmup timeout after {:?}: {:?}", RPC_WARMUP_TIMEOUT, err
+                        );
+                    }
+                });
             }
 
             let current_head_ref = &mut *self.state.write().unwrap();
