@@ -150,6 +150,13 @@ async fn warm_up_rpc_cache(
     block: &BlockHeaderWithHash,
     env: &RpcServiceEnvironment,
 ) {
+    // Sync call: goes first because other calls re-use the cached result
+    let _ = crate::services::base_services::get_additional_data(
+        &chain_id,
+        &block.hash,
+        env.persistent_storage(),
+    );
+
     // Async calls
     let get_block_metadata =
         crate::services::base_services::get_block_metadata(&chain_id, &block.hash, env);
@@ -179,11 +186,6 @@ async fn warm_up_rpc_cache(
     );
 
     // Sync calls
-    let _ = crate::services::base_services::get_additional_data(
-        &chain_id,
-        &block.hash,
-        env.persistent_storage(),
-    );
     let _ = crate::services::base_services::get_block_protocols(
         &chain_id,
         &block.hash,
