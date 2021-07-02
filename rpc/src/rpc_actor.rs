@@ -3,6 +3,7 @@
 
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use getset::{CopyGetters, Getters, Setters};
 use riker::actors::*;
@@ -199,6 +200,9 @@ async fn warm_up_rpc_cache(
     );
 }
 
+/// Timeout for RPCs warmup block time
+const RPC_WARMUP_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl Receive<ShellChannelMsg> for RpcServer {
     type Msg = RpcServerMsg;
 
@@ -209,7 +213,15 @@ impl Receive<ShellChannelMsg> for RpcServer {
 
             // warm-up - calls where chain_id + block_hash
             if is_bootstrapped {
-                futures::executor::block_on(warm_up_rpc_cache(&chain_id, &block, &self.env));
+                if let Err(err) = futures::executor::block_on(tokio::time::timeout(
+                    RPC_WARMUP_TIMEOUT,
+                    warm_up_rpc_cache(&chain_id, &block, &self.env),
+                )) {
+                    warn!(
+                        self.env.log(),
+                        "RPC warmup timeout after {:?}: {:?}", RPC_WARMUP_TIMEOUT, err
+                    );
+                }
             }
 
             let current_head_ref = &mut *self.state.write().unwrap();
