@@ -145,6 +145,58 @@ impl Actor for RpcServer {
     }
 }
 
+async fn warm_up_rpc_cache(
+    chain_id: &ChainId,
+    block: &BlockHeaderWithHash,
+    env: &RpcServiceEnvironment,
+) {
+    // Async calls
+    let get_block_metadata =
+        crate::services::base_services::get_block_metadata(&chain_id, &block.hash, env);
+    let get_block = crate::services::base_services::get_block(&chain_id, &block.hash, &env);
+    let get_block_operations_metadata =
+        crate::services::base_services::get_block_operations_metadata(
+            chain_id.clone(),
+            &block.hash,
+            env,
+        );
+    let get_block_operation_hashes = crate::services::base_services::get_block_operation_hashes(
+        chain_id.clone(),
+        &block.hash,
+        &env,
+    );
+    let get_block_header = crate::services::base_services::get_block_header(
+        chain_id.clone(),
+        block.hash.clone(),
+        &env.persistent_storage(),
+    );
+    let _ = futures::join!(
+        get_block_metadata,
+        get_block,
+        get_block_operations_metadata,
+        get_block_operation_hashes,
+        get_block_header,
+    );
+
+    // Sync calls
+    let _ = crate::services::base_services::get_additional_data(
+        &chain_id,
+        &block.hash,
+        env.persistent_storage(),
+    );
+    let _ = crate::services::base_services::get_block_protocols(
+        &chain_id,
+        &block.hash,
+        &env.persistent_storage(),
+    );
+    let _ = crate::services::base_services::live_blocks(chain_id.clone(), block.hash.clone(), &env);
+    let _ = crate::services::base_services::get_block_shell_header(
+        chain_id.clone(),
+        block.hash.clone(),
+        &env.persistent_storage(),
+    );
+}
+
 impl Receive<ShellChannelMsg> for RpcServer {
     type Msg = RpcServerMsg;
 
@@ -152,48 +204,10 @@ impl Receive<ShellChannelMsg> for RpcServer {
         if let ShellChannelMsg::NewCurrentHead(_, block) = msg {
             // prepare main chain_id
             let chain_id = parse_chain_id(MAIN_CHAIN_ID, &self.env).unwrap();
+
             // warm-up - calls where chain_id + block_hash
-            let _ = crate::services::base_services::get_block_metadata(
-                &chain_id,
-                &block.hash,
-                &self.env,
-            );
-            let _ = crate::services::base_services::get_additional_data(
-                &chain_id,
-                &block.hash,
-                &self.env.persistent_storage(),
-            );
-            let _ = crate::services::base_services::get_block(&chain_id, &block.hash, &self.env);
-            let _ = crate::services::base_services::get_block_operations_metadata(
-                chain_id.clone(),
-                &block.hash,
-                &self.env,
-            );
-            let _ = crate::services::base_services::get_block_operation_hashes(
-                chain_id.clone(),
-                &block.hash,
-                &self.env,
-            );
-            let _ = crate::services::base_services::get_block_protocols(
-                &chain_id,
-                &block.hash,
-                &self.env.persistent_storage(),
-            );
-            let _ = crate::services::base_services::live_blocks(
-                chain_id.clone(),
-                block.hash.clone(),
-                &self.env,
-            );
-            let _ = crate::services::base_services::get_block_shell_header(
-                chain_id.clone(),
-                block.hash.clone(),
-                &self.env.persistent_storage(),
-            );
-            let _ = crate::services::base_services::get_block_header(
-                chain_id.clone(),
-                block.hash.clone(),
-                &self.env.persistent_storage(),
-            );
+            futures::executor::block_on(warm_up_rpc_cache(&chain_id, &block, &self.env));
+
             let current_head_ref = &mut *self.state.write().unwrap();
             current_head_ref.current_head = Some(block);
         }
