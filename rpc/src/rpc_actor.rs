@@ -203,12 +203,14 @@ impl Receive<ShellChannelMsg> for RpcServer {
     type Msg = RpcServerMsg;
 
     fn receive(&mut self, _ctx: &Context<Self::Msg>, msg: ShellChannelMsg, _sender: Sender) {
-        if let ShellChannelMsg::NewCurrentHead(_, block) = msg {
+        if let ShellChannelMsg::NewCurrentHead(_, block, is_bootstrapped) = msg {
             // prepare main chain_id
             let chain_id = parse_chain_id(MAIN_CHAIN_ID, &self.env).unwrap();
 
             // warm-up - calls where chain_id + block_hash
-            futures::executor::block_on(warm_up_rpc_cache(&chain_id, &block, &self.env));
+            if is_bootstrapped {
+                futures::executor::block_on(warm_up_rpc_cache(&chain_id, &block, &self.env));
+            }
 
             let current_head_ref = &mut *self.state.write().unwrap();
             current_head_ref.current_head = Some(block);
