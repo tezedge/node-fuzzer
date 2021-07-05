@@ -1,28 +1,35 @@
-use std::iter::FromIterator;
-use std::time::{Duration, Instant};
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::iter::FromIterator;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
+
 use slog::Drain;
 
 use tezedge_state::ShellCompatibilityVersion;
-use tezos_messages::p2p::encoding::peer::PeerMessage;
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tezos_messages::p2p::encoding::{advertise::AdvertiseMessage, peer::PeerMessage};
+
 use tla_sm::Acceptor;
 
-use crypto::{crypto_box::{CryptoKey, PublicKey, SecretKey}, hash::{CryptoboxPublicKeyHash, HashTrait}, proof_of_work::ProofOfWork};
+use crypto::{
+    crypto_box::{CryptoKey, PublicKey, SecretKey},
+    hash::{CryptoboxPublicKeyHash, HashTrait},
+    proof_of_work::ProofOfWork,
+};
 use hex::FromHex;
-use tezos_identity::Identity;
-use tezedge_state::{TezedgeState, TezedgeConfig, PeerAddress};
 use tezedge_state::proposals::ExtendPotentialPeersProposal;
+use tezedge_state::{PeerAddress, TezedgeConfig, TezedgeState};
+use tezos_identity::Identity;
 
-use tezedge_state::proposer::{TezedgeProposer, TezedgeProposerConfig, Notification};
-use tezedge_state::proposer::mio_manager::{MioManager, MioEvents};
+use tezedge_state::proposer::mio_manager::{MioEvents, MioManager};
+use tezedge_state::proposer::{Notification, TezedgeProposer, TezedgeProposerConfig};
 
 fn shell_compatibility_version() -> ShellCompatibilityVersion {
-    ShellCompatibilityVersion::new(
-        "TEZOS_MAINNET".to_owned(),
-        vec![0],
-        vec![0, 1],
-    )
+    ShellCompatibilityVersion::new("TEZOS_MAINNET".to_owned(), vec![0], vec![0, 1])
 }
 
 fn identity(pkh: &[u8], pk: &[u8], sk: &[u8], pow: &[u8]) -> Identity {
@@ -36,10 +43,21 @@ fn identity(pkh: &[u8], pk: &[u8], sk: &[u8], pow: &[u8]) -> Identity {
 
 fn identity_1() -> Identity {
     identity(
-        &[86, 205, 231, 178, 152, 146, 2, 157, 213, 131, 90, 117, 83, 132, 177, 84],
-        &[148, 73, 141, 148, 22, 20, 15, 188, 69, 132, 149, 51, 61, 170, 193, 180, 200, 126, 65, 159, 87, 38, 113, 122, 84, 249, 182, 198, 116, 118, 174, 28],
-        &[172, 122, 207, 58, 254, 215, 99, 123, 225, 15, 143, 199, 106, 46, 182, 179, 53, 156, 120, 173, 177, 216, 19, 180, 28, 186, 179, 250, 233, 84, 244, 177],
-        &[187, 194, 48, 1, 73, 36, 158, 28, 204, 132, 165, 67, 98, 35, 108, 60, 187, 194, 204, 47, 251, 211, 182, 234],
+        &[
+            86, 205, 231, 178, 152, 146, 2, 157, 213, 131, 90, 117, 83, 132, 177, 84,
+        ],
+        &[
+            148, 73, 141, 148, 22, 20, 15, 188, 69, 132, 149, 51, 61, 170, 193, 180, 200, 126, 65,
+            159, 87, 38, 113, 122, 84, 249, 182, 198, 116, 118, 174, 28,
+        ],
+        &[
+            172, 122, 207, 58, 254, 215, 99, 123, 225, 15, 143, 199, 106, 46, 182, 179, 53, 156,
+            120, 173, 177, 216, 19, 180, 28, 186, 179, 250, 233, 84, 244, 177,
+        ],
+        &[
+            187, 194, 48, 1, 73, 36, 158, 28, 204, 132, 165, 67, 98, 35, 108, 60, 187, 194, 204,
+            47, 251, 211, 182, 234,
+        ],
     )
 }
 
@@ -50,11 +68,11 @@ fn logger(level: slog::Level) -> slog::Logger {
         slog_async::Async::new(
             slog_term::FullFormat::new(slog_term::TermDecorator::new().build())
                 .build()
-                .fuse()
+                .fuse(),
         )
         .chan_size(32768)
         .overflow_strategy(slog_async::OverflowStrategy::Block)
-        .build()
+        .build(),
     );
 
     slog::Logger::root(drain.filter_level(level).fuse(), slog::o!())
@@ -90,11 +108,10 @@ fn build_tezedge_state() -> TezedgeState {
         Instant::now(),
     );
 
-
     let peer_addresses = HashSet::<_>::from_iter(
         [
             // Potential peers which state machine will try to connect to.
-            vec!["159.65.98.117:9732", "34.245.171.88:9732", "18.182.168.120:9732", "13.115.2.66:9732", "18.179.219.134:9732", "45.77.35.193:9732", "73.96.221.90:9732", "62.149.16.61:9732", "18.182.169.115:9732", "143.110.185.25:9732", "45.32.203.167:9732", "66.70.178.32:9732", "64.225.6.118:9732", "104.236.125.54:9732", "84.201.132.206:9732", "46.245.179.162:9733", "18.158.218.189:9732", "138.201.9.113:9735", "95.217.154.147:9732", "62.109.18.93:9732", "24.134.10.217:9732", "135.181.49.110:9732", "95.217.46.253:9732", "46.245.179.163:9732", "18.185.162.213:9732", "34.107.95.94:9732", "162.55.1.145:9732", "34.208.149.159:9732", "13.251.146.136:9732", "143.110.209.198:9732", "34.255.45.216:9732", "107.191.62.113:9732", "15.236.199.66:9732", "[::ffff:95.216.45.62]:9732", "157.90.35.112:9732", "144.76.200.188:9732", "[::ffff:18.185.162.213]:9732", "[::ffff:18.184.136.151]:9732", "[::ffff:18.195.59.36]:9732", "[::ffff:18.185.162.144]:9732", "[::ffff:18.185.78.112]:9732", "[::ffff:116.202.172.21]:9732"]
+            vec!["127.0.0.1:9732"]
                 .into_iter()
                 .map(|x| x.parse().unwrap())
                 .collect::<Vec<_>>(),
@@ -106,7 +123,9 @@ fn build_tezedge_state() -> TezedgeState {
             //         (x / 256) % 256,
             //         x % 256,
             //     )).collect::<Vec<_>>(),
-        ].concat().into_iter()
+        ]
+        .concat()
+        .into_iter(),
     );
 
     let _ = tezedge_state.accept(ExtendPotentialPeersProposal {
@@ -117,7 +136,75 @@ fn build_tezedge_state() -> TezedgeState {
     tezedge_state
 }
 
+struct IpV4Generator {
+    rng: Option<SmallRng>,
+    a: u8,
+    b: u8,
+    c: u8,
+    d: u8,
+}
+
+impl IpV4Generator {
+    pub fn new_linear(a: u8, b: u8, c: u8, d: u8) -> Self {
+        IpV4Generator {
+            rng: None,
+            a,
+            b,
+            c,
+            d,
+        }
+    }
+
+    pub fn new_random(seed: [u8; 32]) -> Self {
+        let small_rng = SmallRng::from_seed(seed);
+        IpV4Generator {
+            rng: Some(small_rng),
+            a: 0,
+            b: 0,
+            c: 0,
+            d: 0,
+        }
+    }
+
+    pub fn default_linear() -> Self {
+        IpV4Generator::new_linear(0, 0, 0, 0)
+    }
+}
+
+impl Iterator for IpV4Generator {
+    type Item = IpAddr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.rng {
+            Some(rng) => Some(IpAddr::V4(Ipv4Addr::new(
+                rng.gen(),
+                rng.gen(),
+                rng.gen(),
+                rng.gen(),
+            ))),
+            None => {
+                self.d = self.d.wrapping_add(1);
+
+                if self.d == 0 {
+                    self.c = self.c.wrapping_add(1);
+
+                    if self.c == 0 {
+                        self.b = self.b.wrapping_add(1);
+
+                        if self.b == 0 {
+                            self.a = self.a.wrapping_add(1);
+                        }
+                    }
+                }
+                Some(IpAddr::V4(Ipv4Addr::new(self.a, self.b, self.c, self.d)))
+            }
+        }
+    }
+}
 fn main() {
+    // TODO: seed chosen by user
+    let mut ip_gen = IpV4Generator::new_random([1; 32]);
+
     let mut proposer = TezedgeProposer::new(
         TezedgeProposerConfig {
             wait_for_events_timeout: Some(Duration::from_millis(250)),
@@ -126,7 +213,7 @@ fn main() {
         build_tezedge_state(),
         // capacity is changed by events_limit.
         MioEvents::new(),
-        MioManager::new(SERVER_PORT)
+        MioManager::new(SERVER_PORT),
     );
 
     loop {
@@ -134,6 +221,7 @@ fn main() {
         for n in proposer.take_notifications().collect::<Vec<_>>() {
             match n {
                 Notification::HandshakeSuccessful { peer_address, .. } => {
+                    eprintln!("handshake from {}", peer_address);
                     // Send Bootstrap message.
                     proposer.send_message_to_peer_or_queue(
                         Instant::now(),
@@ -142,7 +230,40 @@ fn main() {
                     );
                 }
                 Notification::MessageReceived { peer, message } => {
-                    eprintln!("received message from {}, contents: {:?}", peer, message.message);
+                    eprintln!(
+                        "received message from {}, contents: {:?}",
+                        peer, message.message
+                    );
+                    eprintln!("Starting advertise message flood...");
+                    let mut vec = Vec::new();
+
+                    for ip in &mut ip_gen {
+                        let socket = SocketAddr::new(ip, 9732);
+                        vec.push(socket);
+
+                        if vec.len() == 100 {
+                            let advertise = AdvertiseMessage::new(&vec);
+                            proposer.send_message_to_peer_or_queue(
+                                Instant::now(),
+                                peer,
+                                PeerMessage::Advertise(advertise),
+                            );
+                            vec.clear();
+                        }
+
+                        // Uncomment to avoid broken pipe error but would slow done things
+                        // TODO: find a good throughput threshold to call this
+                        // TODO2: also even with this enable the light_node closes the connection
+                        //        after some time, HEADs could be injected to make it keep going
+                        //
+                        //proposer.make_progress();
+                    }
+                }
+                Notification::PeerDisconnected { peer } => {
+                    eprintln!("DISCONNECTED {}", peer);
+                }
+                Notification::PeerBlacklisted { peer } => {
+                    eprintln!("BLACKLISTED {}", peer);
                 }
                 _ => {}
             }
