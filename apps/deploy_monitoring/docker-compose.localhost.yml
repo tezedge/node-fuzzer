@@ -13,86 +13,86 @@ services:
     ports:
       - "17832:17832"
 
-  tezedge-debugger:
-    image: tezedge/tezedge-debugger:latest
-    privileged: true
-    environment:
-      - RUST_BACKTRACE=1
-    volumes:
-      - "tezedge-shared-data:/tmp/volume/tezedge:ro"
-      - "ocaml-shared-data:/tmp/volume/tezos:ro"
-      - "./debugger-config.toml:/home/appuser/config.toml:ro"
-      - "/sys/kernel/debug:/sys/kernel/debug:rw"
-      - "/tmp/report:/tmp/report:rw"
-      - "debugger-data:/tmp/debugger_database"
-    ports:
-      - "17732:17732"      # debugger RPC port
-      - "10001:10001/udp"  # debugger syslog port for tezedge node
-      - "11001:11001/udp"  # debugger syslog port for tezos node
+  # tezedge-debugger:
+  #   image: tezedge/tezedge-debugger:latest
+  #   privileged: true
+  #   environment:
+  #     - RUST_BACKTRACE=1
+  #   volumes:
+  #     - "tezedge-shared-data:/tmp/volume/tezedge:ro"
+  #     - "ocaml-shared-data:/tmp/volume/tezos:ro"
+  #     - "./debugger-config.toml:/home/appuser/config.toml:ro"
+  #     - "/sys/kernel/debug:/sys/kernel/debug:rw"
+  #     - "/tmp/report:/tmp/report:rw"
+  #     - "debugger-data:/tmp/debugger_database"
+  #   ports:
+  #     - "17732:17732"      # debugger RPC port
+  #     - "10001:10001/udp"  # debugger syslog port for tezedge node
+  #     - "11001:11001/udp"  # debugger syslog port for tezos node
 
-  tezedge-node:
-    image: local/tezedge:temp
-    command: ["--network", "${TEZOS_NETWORK}", "file", "--log", "terminal", "file", "--log-file", "/tmp/tezedge/tezedge.log", "--peer-thresh-low", "100", "--peer-thresh-high", "150"]
-    logging:
-      # Produce syslogs instead of terminal logs
-      driver: "syslog"
-      options:
-        # Send the logs to syslog (UDP only) server (running on debugger)
-        syslog-address: "udp://0.0.0.0:10001"  # Port must match debugger syslog port in 'ports' section
-        # Always in same RFC 5424 format (with microseconds precision)
-        syslog-format: "rfc5424micro"
-    volumes:
-      - "tezedge-shared-data:/tmp/tezedge"
-    ports:
-      - "4927:4927"       # node WS port (required only for tezedge)
-      - "9732:9732"       # node P2P port
-      - "18732:18732"     # node RPC port
-      - "3030:3030"       # sandbox launcher port
+  # tezedge-node:
+  #   image: local/tezedge:temp
+  #   command: ["--network", "${TEZOS_NETWORK}", "file", "--log", "terminal", "file", "--log-file", "/tmp/tezedge/tezedge.log", "--peer-thresh-low", "100", "--peer-thresh-high", "150"]
+  #   logging:
+  #     # Produce syslogs instead of terminal logs
+  #     driver: "syslog"
+  #     options:
+  #       # Send the logs to syslog (UDP only) server (running on debugger)
+  #       syslog-address: "udp://0.0.0.0:10001"  # Port must match debugger syslog port in 'ports' section
+  #       # Always in same RFC 5424 format (with microseconds precision)
+  #       syslog-format: "rfc5424micro"
+  #   volumes:
+  #     - "tezedge-shared-data:/tmp/tezedge"
+  #   ports:
+  #     - "4927:4927"       # node WS port (required only for tezedge)
+  #     - "9732:9732"       # node P2P port
+  #     - "18732:18732"     # node RPC port
+  #     - "3030:3030"       # sandbox launcher port
 
-  tezedge-sandbox:
-    image: tezedge/tezedge:sandbox-latest
-    logging:
-      # Produce syslogs instead of terminal logs
-      driver: "syslog"
-      options:
-        # Send the logs to syslog (UDP only) server (running on debugger)
-        syslog-address: "udp://0.0.0.0:10001"  # Port must match debugger syslog port in 'ports' section
-        # Always in same RFC 5424 format (with microseconds precision)
-        syslog-format: "rfc5424micro"
-    volumes:
-      - "tezedge-shared-data:/tmp/tezedge"
-    ports:
-      - "4927:4927"       # node WS port (required only for tezedge)
-      - "9732:9732"       # node P2P port
-      - "18732:18732"     # node RPC port
-      - "3030:3030"       # sandbox launcher port
+  # tezedge-sandbox:
+  #   image: tezedge/tezedge:sandbox-latest
+  #   logging:
+  #     # Produce syslogs instead of terminal logs
+  #     driver: "syslog"
+  #     options:
+  #       # Send the logs to syslog (UDP only) server (running on debugger)
+  #       syslog-address: "udp://0.0.0.0:10001"  # Port must match debugger syslog port in 'ports' section
+  #       # Always in same RFC 5424 format (with microseconds precision)
+  #       syslog-format: "rfc5424micro"
+  #   volumes:
+  #     - "tezedge-shared-data:/tmp/tezedge"
+  #   ports:
+  #     - "4927:4927"       # node WS port (required only for tezedge)
+  #     - "9732:9732"       # node P2P port
+  #     - "18732:18732"     # node RPC port
+  #     - "3030:3030"       # sandbox launcher port
 
-  ocaml-node:
-    image: tezos/tezos:v9-release
-    entrypoint: sh -c "sleep 5 && /usr/local/bin/entrypoint.sh tezos-node --cors-header='content-type' --cors-origin='*' --rpc-addr=[::]:18733 --net-addr=[::]:9733 --history-mode archive --network ${TEZOS_NETWORK}"
-    logging:
-      # Produce syslogs instead of terminal logs
-      driver: "syslog"
-      options:
-        # Send the logs to syslog (UDP only) server (running on debugger)
-        syslog-address: "udp://0.0.0.0:11001"  # Port must match debugger syslog port in 'ports' section
-        # Always in same RFC 5424 format (with microseconds precision)
-        syslog-format: "rfc5424micro"
-    volumes:
-      - "ocaml-shared-data:/var/run/tezos/node"
-    ports:
-      # should be equal inside docker and outside, because the node tells this port in its connection message,
-      # that is how peers can connect to it later
-      - "9733:9733"
-      - "18733:18733"     # node RPC port
+  # ocaml-node:
+  #   image: tezos/tezos:v9-release
+  #   entrypoint: sh -c "sleep 5 && /usr/local/bin/entrypoint.sh tezos-node --cors-header='content-type' --cors-origin='*' --rpc-addr=[::]:18733 --net-addr=[::]:9733 --history-mode archive --network ${TEZOS_NETWORK}"
+  #   logging:
+  #     # Produce syslogs instead of terminal logs
+  #     driver: "syslog"
+  #     options:
+  #       # Send the logs to syslog (UDP only) server (running on debugger)
+  #       syslog-address: "udp://0.0.0.0:11001"  # Port must match debugger syslog port in 'ports' section
+  #       # Always in same RFC 5424 format (with microseconds precision)
+  #       syslog-format: "rfc5424micro"
+  #   volumes:
+  #     - "ocaml-shared-data:/var/run/tezos/node"
+  #   ports:
+  #     # should be equal inside docker and outside, because the node tells this port in its connection message,
+  #     # that is how peers can connect to it later
+  #     - "9733:9733"
+  #     - "18733:18733"     # node RPC port
 
   explorer:
     image: tezedge/tezedge-explorer:latest
     environment:
-      - SANDBOX=http://localhost:3030
-      - DEBUGGER=http://localhost:17732
+      - SANDBOX=http://95.217.115.243:3030
+      - DEBUGGER=http://95.217.115.243:17732
       # need a better way to provide such information
-      - API=[{"id":"rust","name":"rust.localhost","http":"http://localhost:18732","ws":"ws://localhost:4927","monitoring":"http://localhost:38732/resources/tezedge","p2p_port":9732,"features":["MONITORING","RESOURCES","MEMPOOL_ACTION","STORAGE_BLOCK","NETWORK_ACTION","LOGS_ACTION"]},{"id":"ocaml","name":"ocaml.localhost","http":"http://localhost:18733","ws":false,"monitoring":"http://localhost:38732/resources/ocaml","p2p_port":9733,"features":["MONITORING","RESOURCES","MEMPOOL_ACTION","NETWORK_ACTION","LOGS_ACTION"]}]
+      - API=[{"id":"rust","name":"rust","http":"http://95.217.115.243:18732","ws":"ws://95.217.115.243:4927","monitoring":"http://95.217.115.243:38732/resources/tezedge","p2p_port":9732,"features":["MONITORING","RESOURCES","MEMPOOL_ACTION","STORAGE_BLOCK","NETWORK_ACTION","LOGS_ACTION"]},{"id":"ocaml","name":"ocaml.localhost","http":"http://localhost:18733","ws":false,"monitoring":"http://localhost:38732/resources/ocaml","p2p_port":9733,"features":["MONITORING","RESOURCES","MEMPOOL_ACTION","NETWORK_ACTION","LOGS_ACTION"]}]
     ports:
       - "80:80"
 volumes:
