@@ -417,7 +417,7 @@ impl<S, NetE, Es, M> TezedgeProposer<Es, M>
         at: Instant,
         addr: PeerAddress,
         message: PeerMessage,
-    ) {
+    ) -> Result<(), &'static str> {
         if let Some(peer) = self.manager.get_peer(&addr) {
             self.state.accept(SendPeerMessageProposal {
                 at,
@@ -432,8 +432,9 @@ impl<S, NetE, Es, M> TezedgeProposer<Es, M>
                 peer: addr,
                 stream: &mut peer.stream,
             });
+            Ok(())
         } else {
-            eprintln!("queueing send message failed since peer not found!");
+            Err("queueing send message failed since peer not found!")
         }
     }
 
