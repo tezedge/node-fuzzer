@@ -1,31 +1,26 @@
+mod generator;
+
+use generator::Generator;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::rc::Rc;
-use std::cell::RefCell;
-
-use rand::distributions::Standard;
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use std::u128;
 
 use slog::Drain;
 
 use tezedge_state::ShellCompatibilityVersion;
-use tezos_messages::p2p::encoding::peer::PeerMessageResponse;
+use tezos_messages::p2p::encoding::peer::{PeerMessage, PeerMessageResponse};
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tezos_messages::p2p::encoding::{
-    advertise::AdvertiseMessage,
-    swap::SwapMessage,
-    peer::PeerMessage,
-    limits};
 
 use tla_sm::Acceptor;
 
 use crypto::{
     crypto_box::{CryptoKey, PublicKey, SecretKey},
-    hash::{CryptoboxPublicKeyHash, HashTrait, HashType},
+    hash::{CryptoboxPublicKeyHash, HashTrait, HashType, ChainId},
     proof_of_work::ProofOfWork,
 };
 use hex::FromHex;
@@ -144,239 +139,21 @@ fn build_tezedge_state() -> TezedgeState {
     tezedge_state
 }
 
-// Two ways of generating IpV4 addresses: random or lineal (index)
-enum IpV4Generator {
-    Rng(Rc<RefCell<SmallRng>>),
-    Index(u32),
-}
-
-impl IpV4Generator {
-    pub fn from_index(index: u32) -> IpAddr {
-        let [a, b, c, d] = index.to_le_bytes();
-        IpAddr::V4(Ipv4Addr::new(a, b, c, d))
-    }
-
-    pub fn from_rng(rng: &Rc<RefCell<SmallRng>>) -> IpAddr {
-        IpV4Generator::from_index(rng.borrow_mut().gen())
-    }
-
-    pub fn to_index(addr: Ipv4Addr) -> u32 {
-        u32::from_le_bytes(addr.octets())
-    }
-
-    pub fn new_random(seed: [u8; 32]) -> Self {
-        IpV4Generator::Rng(Rc::new(RefCell::new(SmallRng::from_seed(seed))))
-    }
-}
-
-impl Iterator for IpV4Generator {
-    type Item = IpAddr;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self {
-            IpV4Generator::Rng(rng) => IpV4Generator::from_rng(rng),
-            IpV4Generator::Index(index) => {
-                *index = index.wrapping_add(1);
-                IpV4Generator::from_index(*index)
-            },
-        };
-        Some(ret)
-    }
-}
-
-enum PeerAddrGenerator {
-    Rng(Rc<RefCell<SmallRng>>),
-    Index(u64),
-}
-
-impl PeerAddrGenerator {
-    pub fn from_index(index: u64) -> SocketAddr {
-        let port_index = (index & 0xffff) as u16;
-        let ip_index = ((index >> 16) & 0xffffffff) as u32;
-        SocketAddr::new(IpV4Generator::from_index(ip_index), port_index)
-    }
-
-    pub fn from_rng(rng: &Rc<RefCell<SmallRng>>) -> SocketAddr {
-        PeerAddrGenerator::from_index(rng.borrow_mut().gen())
-    }
-
-    pub fn new_random(seed: [u8; 32]) -> Self {
-        PeerAddrGenerator::Rng(Rc::new(RefCell::new(SmallRng::from_seed(seed))))
-    }
-}
-
-impl Iterator for PeerAddrGenerator {
-    type Item = SocketAddr;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self {
-            PeerAddrGenerator::Rng(rng) => PeerAddrGenerator::from_rng(rng),
-            PeerAddrGenerator::Index(index) => {
-                *index = index.wrapping_add(1);
-                PeerAddrGenerator::from_index(*index)
-            },
-        };
-        Some(ret)
-    }
-}
-
-enum AdvertiseMessageGenerator {
-    Rng(Rc<RefCell<SmallRng>>),
-    Index(u64),
-}
-
-impl AdvertiseMessageGenerator {
-    pub fn from_index(index: u64) -> AdvertiseMessage {
-        let max_size = limits::ADVERTISE_ID_LIST_MAX_LENGTH;
-        let count: usize = std::cmp::min((index & 0xff) as usize, max_size);
-        let vec: Vec<SocketAddr> = PeerAddrGenerator::Index(index >> 8).take(count).collect();
-        AdvertiseMessage::new(&vec)
-    }
-
-    pub fn from_rng(rng: &Rc<RefCell<SmallRng>>) -> AdvertiseMessage {
-        let max_size = limits::ADVERTISE_ID_LIST_MAX_LENGTH;
-        let count = rng.borrow_mut().gen_range(1 .. max_size);
-        let vec: Vec<SocketAddr> = PeerAddrGenerator::Rng(rng.clone()).take(count).collect();
-        AdvertiseMessage::new(&vec)
-    }
-
-    pub fn new_random(seed: [u8; 32]) -> Self {
-        AdvertiseMessageGenerator::Rng(Rc::new(RefCell::new(SmallRng::from_seed(seed))))
-    }
-}
-
-impl Iterator for AdvertiseMessageGenerator {
-    type Item = AdvertiseMessage;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self {
-            AdvertiseMessageGenerator::Rng(rng) => {
-                AdvertiseMessageGenerator::from_rng(rng)
-            },
-            AdvertiseMessageGenerator::Index(index) => {
-                *index = index.wrapping_add(1);
-                AdvertiseMessageGenerator::from_index(*index)
-            },
-        };
-        Some(ret)
-    }
-}
-
-
-enum SwapMessageGenerator {
-    Rng(Rc<RefCell<SmallRng>>),
-    Index(u64),
-}
-
-
-fn random_bytes(rng: &Rc<RefCell<SmallRng>>, size: usize) -> Vec<u8> {
-    (0..size).map(|_| { rng.borrow_mut().gen() }).collect()
-}
-
-fn random_string(rng: &Rc<RefCell<SmallRng>>, size: usize) -> String {
-    let mut rng_ref = rng.borrow_mut();
-    (0..size).map(|_| { rng_ref.gen::<char>() }).collect()
-} 
-
-impl SwapMessageGenerator {
-    pub fn from_index(index: u64) -> SwapMessage {
-        panic!("SwapMessageGenerator::from_index not implemented!");
-    }
-
-    pub fn from_rng(rng: &Rc<RefCell<SmallRng>>) -> SwapMessage {
-        let max_size = limits::P2P_POINT_MAX_SIZE - 5; // there is a BUG in the encoder
-        let count = rng.borrow_mut().gen_range(0..max_size);
-        let pkh_bytes = random_bytes(rng, HashType::CryptoboxPublicKeyHash.size());
-        let mut point = random_string(rng, count);
-
-        while point.len() >= count {
-            point.pop();
-        }
-    
-        //eprintln!("point len {}", point.len());
-        //let point = "127.0.0.1:12345".to_string();
-        SwapMessage::new(
-            point,
-            CryptoboxPublicKeyHash::try_from_bytes(&pkh_bytes[..]).unwrap()
-        )
-    }
-
-    pub fn new_random(seed: [u8; 32]) -> Self {
-        SwapMessageGenerator::Rng(Rc::new(RefCell::new(SmallRng::from_seed(seed))))
-    }
-}
-
-impl Iterator for SwapMessageGenerator {
-    type Item = SwapMessage;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self {
-            SwapMessageGenerator::Rng(rng) => {
-                SwapMessageGenerator::from_rng(rng)
-            },
-            SwapMessageGenerator::Index(index) => {
-                *index = index.wrapping_add(1);
-                SwapMessageGenerator::from_index(*index)
-            },
-        };
-        Some(ret)
-    }
-}
-
-enum PeerMessageGenerator {
-    Rng(Rc<RefCell<SmallRng>>),
-    Index(u64),
-}
-
-impl PeerMessageGenerator {
-    pub fn from_index(index: u64) -> PeerMessage {
-        panic!("MessageGenerator::from_index not implemented!");
-    }
-
-    pub fn from_rng(rng: &Rc<RefCell<SmallRng>>) -> PeerMessage {
-        let n = rng.borrow_mut().gen_range(0..2);
-
-        match n {
-             0 => PeerMessage::Advertise(AdvertiseMessageGenerator::from_rng(rng)),
-             1 => PeerMessage::SwapRequest(SwapMessageGenerator::from_rng(rng)),
-             _ => PeerMessage::SwapAck(SwapMessageGenerator::from_rng(rng)),
-        }
-    }
-
-    pub fn new_random(seed: [u8; 32]) -> Self {
-        PeerMessageGenerator::Rng(Rc::new(RefCell::new(SmallRng::from_seed(seed))))
-    }
-}
-
-impl Iterator for PeerMessageGenerator {
-    type Item = PeerMessage;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self {
-            PeerMessageGenerator::Rng(rng) => {
-                PeerMessageGenerator::from_rng(rng)
-            },
-            PeerMessageGenerator::Index(index) => {
-                *index = index.wrapping_add(1);
-                PeerMessageGenerator::from_index(*index)
-            },
-        };
-        Some(ret)
-    }
-}
 
 
 struct BadNode {
     throughput: usize,
-    generator: PeerMessageGenerator,
+    generator: generator::Message,
+    peer: Option<PeerAddress>,
     proposer: TezedgeProposer<MioEvents, MioManager>,
 }
 
 impl BadNode {
     pub fn new() -> Self {
         BadNode {
-            throughput: 0x100000, // TODO: fix BrokenPipe error
-            generator: PeerMessageGenerator::new_random([1; 32]),
+            throughput: 0x80000, // TODO: fix BrokenPipe error
+            generator: generator::Message::new([1; 32]),
+            peer: None,
             proposer: TezedgeProposer::new(
                 TezedgeProposerConfig {
                     wait_for_events_timeout: Some(Duration::from_millis(250)),
@@ -409,42 +186,51 @@ impl BadNode {
         }
     }
 
-    pub fn handle_response(&mut self, peer: PeerAddress, msg: PeerMessageResponse) {
-        eprintln!("received message from {}, contents: {:?}", peer, msg.message);
-        //eprintln!("Starting advertise message flood...");
-
-        for (i, msg) in self.generator.by_ref().enumerate() {    
-            BadNode::send(&mut self.proposer, peer, msg);
-            //eprintln!("{} sent", i);
-
-            if i % self.throughput == 0 {
-                eprintln!("{} messages", i);
-                self.proposer.make_progress();
-            }    
+    pub fn send_messages(&mut self) {
+        let msg_generator = generator::iterable(self.generator.clone());
+        for msg in msg_generator.take(self.throughput) {
+            BadNode::send(&mut self.proposer, self.peer.unwrap(), msg);
         }
     }
 
-    pub fn handle_events(&mut self) {
+    pub fn handle_response(&mut self, msg: PeerMessageResponse) {
+        eprintln!("received message from {}, contents: {:?}", self.peer.unwrap(), msg.message);
+        // TODO: use incoming messages as feedback for the fuzzer
+    }
+
+    pub fn handle_events(&mut self) -> bool {
         self.proposer.make_progress();
 
         for n in self.proposer.take_notifications().collect::<Vec<_>>() {
             match n {
                 Notification::HandshakeSuccessful { peer_address, .. } => {
+                    self.peer = Some(peer_address);
                     eprintln!("handshake from {}", peer_address);
                     BadNode::send(&mut self.proposer, peer_address, PeerMessage::Bootstrap);
                 }
                 Notification::MessageReceived { peer, message } => {
-                    self.handle_response(peer, message);
+                    self.peer = Some(peer);
+                    self.handle_response(message);
                 }
                 Notification::PeerDisconnected { peer } => {
                     eprintln!("DISCONNECTED {}", peer);
+                    self.peer = None;
+                    return false;
                 }
                 Notification::PeerBlacklisted { peer } => {
                     eprintln!("BLACKLISTED {}", peer);
+                    self.peer = None;
+                    return false;
                 }
                 _ => {}
             }
         }
+        match self.peer {
+            Some(_peer) => self.send_messages(),
+            _ => {}
+        }
+        
+        true
     }
 }
 
@@ -452,7 +238,6 @@ impl BadNode {
 fn main() {
     let mut node = BadNode::new();
 
-    loop {        
-        node.handle_events();
+    while node.handle_events() {        
     }
 }
