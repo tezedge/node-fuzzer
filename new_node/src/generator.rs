@@ -22,6 +22,7 @@ use tezos_messages::p2p::encoding::{
     peer,
     swap,
     protocol,
+    operations_for_blocks,
 }; 
 
 use crypto::{
@@ -405,6 +406,27 @@ impl Generator for Protocol {
 }
 
 
+type OperationsForBlock = RandomState<operations_for_blocks::OperationsForBlock>;
+impl Generator for OperationsForBlock {
+    type Item = operations_for_blocks::OperationsForBlock;
+    fn make(&mut self) -> Self::Item {
+        let block_hash = Hash::<crypto::hash::BlockHash> {
+            0: RandomState::from(self)
+        }.make();
+        Self::Item::new(block_hash, self.gen())
+    }
+}
+
+type GetOperationsForBlocksMessage = RandomState<operations_for_blocks::GetOperationsForBlocksMessage>;
+impl Generator for GetOperationsForBlocksMessage {
+    type Item = operations_for_blocks::GetOperationsForBlocksMessage;
+    fn make(&mut self) -> Self::Item {
+        let max_ops = limits::GET_OPERATIONS_FOR_BLOCKS_MAX_LENGTH;
+        let operations = iterable(OperationsForBlock::from(self));
+        Self::Item::new(operations.take(self.gen_range(0..max_ops)).collect())
+    }
+}
+
 type ProtocolMessage = RandomState<protocol::ProtocolMessage>;
 impl Generator for ProtocolMessage {
     type Item = protocol::ProtocolMessage;
@@ -413,6 +435,55 @@ impl Generator for ProtocolMessage {
     }
 }
 
+type PathItem = RandomState<operations_for_blocks::PathItem>;
+impl Generator for PathItem {
+    type Item = operations_for_blocks::PathItem;
+    fn make(&mut self) -> Self::Item {
+        let size = self.gen_range(0..0x1000);
+        let hash = self.gen_vec::<u8>(size);
+        
+        match self.gen::<bool>() {
+            true => Self::Item::right(hash),
+            false => Self::Item::left(hash),
+        }
+    }
+}
+
+type Path = RandomState<operations_for_blocks::Path>;
+impl Generator for Path {
+    type Item = operations_for_blocks::Path;
+    fn make(&mut self) -> Self::Item {
+        let max_depth = operations_for_blocks::MAX_PASS_MERKLE_DEPTH.unwrap();
+        let items = iterable(PathItem::from(self));        
+        Self::Item::new(items.take(self.gen_range(0..max_depth)).collect())
+    }
+}
+
+type OperationsForBlocksMessage = RandomState<operations_for_blocks::OperationsForBlocksMessage>;
+impl Generator for OperationsForBlocksMessage {
+    type Item = operations_for_blocks::OperationsForBlocksMessage;
+    fn make(&mut self) -> Self::Item {
+        let mut remaining_size = limits::OPERATION_LIST_MAX_SIZE;
+        let mut operations = Vec::<operation::Operation>::new(); 
+
+        for operation in iterable(Operation::from(self)) {
+            let operation_size = operation.as_bytes().unwrap().len();
+            
+            if operation_size > remaining_size {
+                break;
+            }
+            
+            remaining_size -= operation_size;
+            operations.push(operation);
+        }
+
+        Self::Item::new(
+            OperationsForBlock::from(self).make(),
+            Path::from(self).make(),
+            operations
+        )
+    }
+}
 
 struct PeerAdvertise(RandomState<peer::PeerMessage>);
 impl Generator for PeerAdvertise {
@@ -541,6 +612,27 @@ impl Generator for PeerProtocol {
     }
 }
 
+struct PeerGetOperationsForBlocks(RandomState<peer::PeerMessage>);
+impl Generator for PeerGetOperationsForBlocks {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::GetOperationsForBlocks(
+            GetOperationsForBlocksMessage::from(&self.0).make()
+        )
+    }
+}
+
+struct PeerOperationsForBlocks(RandomState<peer::PeerMessage>);
+impl Generator for PeerOperationsForBlocks {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::OperationsForBlocks(
+            OperationsForBlocksMessage::from(&self.0).make()
+        )
+    }
+}
+
+
 #[derive(Clone)]
 pub struct Message(RandomState<peer::PeerMessage>);
 impl Message {
@@ -552,7 +644,7 @@ impl Message {
 impl Generator for Message {
     type Item = peer::PeerMessage;
     fn make(&mut self) -> Self::Item {
-        let n = self.0.gen_range(0..14);
+        let n = self.0.gen_range(0..16);
         match n {
             0 => PeerAdvertise{ 0: RandomState::from(&self.0) }.make(),
             1 => PeerSwapRequest{ 0: RandomState::from(&self.0) }.make(),
@@ -567,7 +659,9 @@ impl Generator for Message {
             10 => PeerGetOperations{ 0: RandomState::from(&self.0) }.make(),
             11 => PeerOperation{ 0: RandomState::from(&self.0) }.make(),
             12 => PeerGetProtocols{ 0: RandomState::from(&self.0) }.make(),
-            _ => PeerProtocol{ 0: RandomState::from(&self.0) }.make(),
+            13 => PeerProtocol{ 0: RandomState::from(&self.0) }.make(),
+            14 => PeerGetOperationsForBlocks{ 0: RandomState::from(&self.0) }.make(),
+            _ => PeerOperationsForBlocks{ 0: RandomState::from(&self.0) }.make(),
 
         }
     }

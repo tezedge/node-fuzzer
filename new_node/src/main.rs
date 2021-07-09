@@ -1,5 +1,5 @@
 mod generator;
-
+use std::io;
 use generator::Generator;
 use tezedge_state::DefaultEffects;
 use tezos_messages::p2p::binary_message::MessageHash;
@@ -98,10 +98,13 @@ fn build_tezedge_state() -> TezedgeState {
             port: SERVER_PORT,
             disable_mempool: true,
             private_node: false,
-            min_connected_peers: 500,
-            max_connected_peers: 1000,
-            max_pending_peers: 1000,
-            max_potential_peers: 100000,
+            min_connected_peers: 1,
+            /* WARNING: don't change these values
+            otherwise fuzzer might go into to real network */
+            max_connected_peers: 1, 
+            max_pending_peers: 1,
+            max_potential_peers: 1,
+            /* -------------------------------------------- */
             periodic_react_interval: Duration::from_millis(250),
             peer_blacklist_duration: Duration::from_secs(30 * 60),
             peer_timeout: Duration::from_secs(8),
@@ -173,34 +176,29 @@ impl BadNode {
         proposer: &mut TezedgeProposer<MioEvents, DefaultEffects, MioManager>,
         peer: PeerAddress,
         msg: PeerMessage
-    ) {
-        match proposer.blocking_send(Instant::now(), peer, msg) {
-            Err(e) => {
-                eprintln!("ERROR: {}", e);
-                std::process::exit(-1);
-            },
-            Ok(()) => (),
-        }
+    ) -> io::Result<()> {
+        proposer.blocking_send(Instant::now(), peer, msg)
     }
 
-    pub fn send_messages(&mut self) {
+    pub fn send_messages(&mut self) -> io::Result<()> {
         let msg_generator = generator::iterable(self.generator.clone());
         for msg in msg_generator.take(self.throughput) {
-            BadNode::send(&mut self.proposer, self.peer.unwrap(), msg);
+            BadNode::send(&mut self.proposer, self.peer.unwrap(), msg)?;
         }
+
+        Ok(())
     }
 
     pub fn handle_response(&mut self, msg: PeerMessageResponse) {
         eprintln!("received message from {}, contents: {:?}", self.peer.unwrap(), msg.message);
-/*
+        /*
+        TODO: use incoming messages as feedback for the fuzzer
         match msg.message {
-            Pee
         }
         */
-        // TODO: use incoming messages as feedback for the fuzzer
     }
 
-    pub fn handle_events(&mut self) -> bool {
+    pub fn handle_events(&mut self) -> io::Result<()> {
         self.proposer.make_progress();
 
         for n in self.proposer.take_notifications().collect::<Vec<_>>() {
@@ -208,38 +206,41 @@ impl BadNode {
                 Notification::HandshakeSuccessful { peer_address, .. } => {
                     self.peer = Some(peer_address);
                     eprintln!("handshake from {}", peer_address);
-                    BadNode::send(&mut self.proposer, peer_address, PeerMessage::Bootstrap);
-                }
+                    BadNode::send(&mut self.proposer, peer_address, PeerMessage::Bootstrap)?
+                },
                 Notification::MessageReceived { peer, message } => {
                     self.peer = Some(peer);
                     self.handle_response(message);
-                }
-                Notification::PeerDisconnected { peer } => {
-                    eprintln!("DISCONNECTED {}", peer);
-                    self.peer = None;
-                    return false;
-                }
-                Notification::PeerBlacklisted { peer } => {
-                    eprintln!("BLACKLISTED {}", peer);
-                    self.peer = None;
-                    return false;
-                }
+                },
+                Notification::PeerDisconnected {..} => {
+                    return Err(io::Error::new(io::ErrorKind::ConnectionAborted,"disconnected"));
+                },
+                Notification::PeerBlacklisted {..} => {
+                    return Err(io::Error::new(io::ErrorKind::ConnectionAborted,"Blacklisted"));
+                },
                 _ => {}
             }
         }
         match self.peer {
             Some(_peer) => self.send_messages(),
-            _ => {}
+            _ => Ok(())
         }
-
-        true
     }
 }
 
 
 fn main() {
-    let mut node = BadNode::new();
+    loop {
+        let mut node = BadNode::new();
 
-    while node.handle_events() {
-    }
+        loop {
+            match node.handle_events() {
+                Err(e) => {
+                    eprintln!("ERROR: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    } 
 }

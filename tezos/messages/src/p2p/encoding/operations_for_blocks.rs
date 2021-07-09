@@ -148,6 +148,10 @@ impl Path {
     pub fn op() -> Self {
         Path(Vec::new())
     }
+
+    pub fn new(items: Vec<PathItem>) -> Self {
+        Path(items)
+    }
 }
 
 /// Manual serializization ensures that path depth does not exceed max value
