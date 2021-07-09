@@ -1,6 +1,7 @@
 mod generator;
 
 use generator::Generator;
+use tezedge_state::DefaultEffects;
 use tezos_messages::p2p::binary_message::MessageHash;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -146,7 +147,7 @@ struct BadNode {
     throughput: usize,
     generator: generator::Message,
     peer: Option<PeerAddress>,
-    proposer: TezedgeProposer<MioEvents, MioManager>,
+    proposer: TezedgeProposer<MioEvents, DefaultEffects, MioManager>,
 }
 
 impl BadNode {
@@ -169,16 +170,11 @@ impl BadNode {
     }
 
     fn send(
-        proposer: &mut TezedgeProposer<MioEvents, MioManager>,
+        proposer: &mut TezedgeProposer<MioEvents, DefaultEffects, MioManager>,
         peer: PeerAddress,
         msg: PeerMessage
     ) {
-        let result = proposer.send_message_to_peer_or_queue(
-            Instant::now(),
-            peer,
-            msg
-        );
-        match result {
+        match proposer.blocking_send(Instant::now(), peer, msg) {
             Err(e) => {
                 eprintln!("ERROR: {}", e);
                 std::process::exit(-1);
@@ -196,7 +192,7 @@ impl BadNode {
 
     pub fn handle_response(&mut self, msg: PeerMessageResponse) {
         eprintln!("received message from {}, contents: {:?}", self.peer.unwrap(), msg.message);
-/* 
+/*
         match msg.message {
             Pee
         }
@@ -235,7 +231,7 @@ impl BadNode {
             Some(_peer) => self.send_messages(),
             _ => {}
         }
-        
+
         true
     }
 }
@@ -244,6 +240,6 @@ impl BadNode {
 fn main() {
     let mut node = BadNode::new();
 
-    while node.handle_events() {        
+    while node.handle_events() {
     }
 }
