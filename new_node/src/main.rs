@@ -11,6 +11,7 @@ use rand::{Rng, SeedableRng};
 
 use slog::Drain;
 
+use tezedge_state::DefaultEffects;
 use tezedge_state::ShellCompatibilityVersion;
 use tezos_messages::p2p::encoding::peer::PeerMessageResponse;
 
@@ -276,7 +277,7 @@ fn random_bytes(rng: &Rc<RefCell<SmallRng>>, size: usize) -> Vec<u8> {
 fn random_string(rng: &Rc<RefCell<SmallRng>>, size: usize) -> String {
     let mut rng_ref = rng.borrow_mut();
     (0..size).map(|_| { rng_ref.gen::<char>() }).collect()
-} 
+}
 
 impl SwapMessageGenerator {
     pub fn from_index(index: u64) -> SwapMessage {
@@ -292,7 +293,7 @@ impl SwapMessageGenerator {
         while point.len() >= count {
             point.pop();
         }
-    
+
         //eprintln!("point len {}", point.len());
         //let point = "127.0.0.1:12345".to_string();
         SwapMessage::new(
@@ -369,7 +370,7 @@ impl Iterator for PeerMessageGenerator {
 struct BadNode {
     throughput: usize,
     generator: PeerMessageGenerator,
-    proposer: TezedgeProposer<MioEvents, MioManager>,
+    proposer: TezedgeProposer<MioEvents, DefaultEffects, MioManager>,
 }
 
 impl BadNode {
@@ -391,16 +392,11 @@ impl BadNode {
     }
 
     fn send(
-        proposer: &mut TezedgeProposer<MioEvents, MioManager>,
+        proposer: &mut TezedgeProposer<MioEvents, DefaultEffects, MioManager>,
         peer: PeerAddress,
         msg: PeerMessage
     ) {
-        let result = proposer.send_message_to_peer_or_queue(
-            Instant::now(),
-            peer,
-            msg
-        );
-        match result {
+        match proposer.blocking_send(Instant::now(), peer, msg) {
             Err(e) => {
                 eprintln!("ERROR: {}", e);
                 std::process::exit(-1);
@@ -413,14 +409,14 @@ impl BadNode {
         eprintln!("received message from {}, contents: {:?}", peer, msg.message);
         //eprintln!("Starting advertise message flood...");
 
-        for (i, msg) in self.generator.by_ref().enumerate() {    
+        for (i, msg) in self.generator.by_ref().enumerate() {
             BadNode::send(&mut self.proposer, peer, msg);
-            //eprintln!("{} sent", i);
+            // eprintln!("{} sent", i);
 
-            if i % self.throughput == 0 {
-                eprintln!("{} messages", i);
-                self.proposer.make_progress();
-            }    
+            // if i % self.throughput == 0 {
+            //     eprintln!("{} messages", i);
+            //     self.proposer.make_progress();
+            // }
         }
     }
 
@@ -452,7 +448,7 @@ impl BadNode {
 fn main() {
     let mut node = BadNode::new();
 
-    loop {        
+    loop {
         node.handle_events();
     }
 }

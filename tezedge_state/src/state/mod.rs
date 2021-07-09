@@ -128,6 +128,10 @@ impl<E> TezedgeState<E> {
         }
     }
 
+    pub fn config(&self) -> &TezedgeConfig {
+        &self.config
+    }
+
     pub fn newest_time_seen(&self) -> Instant {
         self.newest_time_seen
     }
@@ -456,11 +460,11 @@ impl<E: Effects> TezedgeState<E> {
         let len = self.potential_peers.len()
             .min(self.missing_pending_peers());
 
-        slog::info!(&self.log, "Initiating handshakes";
-                     "connected_peers" => self.connected_peers.len(),
-                     "pending_peers" => self.pending_peers.len(),
-                     "potential_peers" => self.potential_peers.len(),
-                     "initiated_handshakes" => len);
+        // slog::info!(&self.log, "Initiating handshakes";
+        //              "connected_peers" => self.connected_peers.len(),
+        //              "pending_peers" => self.pending_peers.len(),
+        //              "potential_peers" => self.potential_peers.len(),
+        //              "initiated_handshakes" => len);
 
         let peers = self.effects.choose_peers_to_connect_to(
             &self.potential_peers,

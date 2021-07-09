@@ -24,7 +24,7 @@ strum = "0.20"
 strum_macros = "0.20"
 # Local dependencies
 tla-sm = { path = "../tla_sm" }
-tezedge-state = { path = "../tezedge_state" }
+tezedge-state = { path = "../tezedge_state", features = ["blocking"] }
 crypto = { path = "../crypto" }
 logging = { path = "../logging" }
 # tezos_api = { path = "../tezos/api" }
