@@ -1,6 +1,7 @@
 mod generator;
 
 use generator::Generator;
+use tezos_messages::p2p::binary_message::MessageHash;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
@@ -195,6 +196,11 @@ impl BadNode {
 
     pub fn handle_response(&mut self, msg: PeerMessageResponse) {
         eprintln!("received message from {}, contents: {:?}", self.peer.unwrap(), msg.message);
+/* 
+        match msg.message {
+            Pee
+        }
+        */
         // TODO: use incoming messages as feedback for the fuzzer
     }
 

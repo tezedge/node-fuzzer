@@ -51,6 +51,10 @@ impl Operation {
     pub fn data(&self) -> &Vec<u8> {
         &self.data
     }
+
+    pub fn new(branch: BlockHash, data: Vec<u8>) -> Self {
+        Self { branch, data }
+    }
 }
 
 #[derive(Fail, Debug)]

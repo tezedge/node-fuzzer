@@ -9,13 +9,19 @@ use rand::distributions::{
 };
 use std::{iter, net};
 
+use tezos_messages::p2p::binary_message::BinaryWrite;
 use tezos_messages::p2p::encoding::{
-    limits,
     advertise,
-    swap,
-    current_branch,
     block_header,
-    peer
+    current_branch,
+    current_head,
+    deactivate, 
+    limits,
+    mempool, 
+    operation,
+    peer,
+    swap,
+    protocol,
 }; 
 
 use crypto::{
@@ -118,7 +124,7 @@ type AdvertiseMessage = RandomState<advertise::AdvertiseMessage>;
 impl Generator for AdvertiseMessage {
     type Item = advertise::AdvertiseMessage;
     fn make(&mut self) -> Self::Item {
-        let size = self.gen_range(0..limits::ADVERTISE_ID_LIST_MAX_LENGTH);
+        let size = self.gen_range(1..limits::ADVERTISE_ID_LIST_MAX_LENGTH);
         let addresses = iterable(SocketAddr::from(self));
         Self::Item::new(
              &addresses.take(size).collect::<Vec<net::SocketAddr>>()
@@ -140,7 +146,7 @@ impl Generator for SwapMessage {
     type Item = swap::SwapMessage;
     fn make(&mut self) -> Self::Item {
         //let point = "127.0.0.1:12345".to_string();
-        let size_bytes = self.gen_range(0..limits::P2P_POINT_MAX_LENGTH);
+        let size_bytes = self.gen_range(1..limits::P2P_POINT_MAX_LENGTH);
         let pkh = Hash::<crypto::hash::CryptoboxPublicKeyHash> {
             0: RandomState::from(self)
         }.make();
@@ -164,10 +170,10 @@ impl Generator for BlockHeader {
     type Item = block_header::BlockHeader;
     fn make(&mut self) -> Self::Item {
         let max_size = limits::BLOCK_HEADER_MAX_SIZE;
-        let fitness_len: usize = self.gen_range(0..max_size/0x1000/2);
-        let fitness: Vec<usize> = (0..fitness_len)
-        .map(|_| {self.gen_range(0..0x1000)} ).collect();
-        let data_len = self.gen_range(0..0x1000);
+        let fitness_len: usize = self.gen_range(1..max_size/0x1000/2);
+        let fitness: Vec<usize> = (1..fitness_len)
+        .map(|_| {self.gen_range(1..0x1000)} ).collect();
+        let data_len = self.gen_range(1..0x1000);
 
         block_header::BlockHeaderBuilder::default()
         .level(self.gen())
@@ -205,7 +211,7 @@ impl Generator for CurrentBranch {
         Self::Item::new(
             BlockHeader::from(self).make(),
             iterable(block_hash)
-            .take(self.gen_range(0..history_len)).collect()
+            .take(self.gen_range(1..history_len)).collect()
         )
     }
 }
@@ -221,6 +227,192 @@ impl Generator for CurrentBranchMessage {
         Self::Item::new(chain_id, CurrentBranch::from(self).make())
     }
 }
+
+type DeactivateMessage = RandomState<deactivate::DeactivateMessage>;
+impl Generator for DeactivateMessage {
+    type Item = deactivate::DeactivateMessage;
+    fn make(&mut self) -> Self::Item {
+        let chain_id = Hash::<crypto::hash::ChainId> {
+            0: RandomState::from(self)
+        }.make();
+        Self::Item::new(chain_id)
+    }
+}
+
+type GetCurrentHeadMessage = RandomState<current_head::GetCurrentHeadMessage>;
+impl Generator for GetCurrentHeadMessage {
+    type Item = current_head::GetCurrentHeadMessage;
+    fn make(&mut self) -> Self::Item {
+        let chain_id = Hash::<crypto::hash::ChainId> {
+            0: RandomState::from(self)
+        }.make();
+        Self::Item::new(chain_id)
+    }
+}
+
+type Mempool = RandomState<mempool::Mempool>;
+impl Generator for Mempool {
+    type Item = mempool::Mempool;
+    fn make(&mut self) -> Self::Item {
+        let ops = self.gen_range(1..limits::MEMPOOL_MAX_OPERATIONS);
+        let ops_split = self.gen_range(0..ops);
+        let op_hash = Hash::<crypto::hash::OperationHash> {
+            0: RandomState::from(self)
+        };
+        let hashes: Vec<crypto::hash::OperationHash> = iterable(op_hash)
+        .take(ops).collect();
+        Self::Item::new(
+            hashes[..ops_split].to_vec(),
+            hashes[ops_split..ops].to_vec()
+        )
+    }
+}
+
+type CurrentHeadMessage = RandomState<current_head::CurrentHeadMessage>;
+impl Generator for CurrentHeadMessage {
+    type Item = current_head::CurrentHeadMessage;
+    fn make(&mut self) -> Self::Item {
+        let chain_id = Hash::<crypto::hash::ChainId> {
+            0: RandomState::from(self)
+        }.make();
+        Self::Item::new(
+            chain_id,
+            BlockHeader::from(self).make(),
+            Mempool::from(self).make()
+        )
+    }
+}
+
+type GetBlockHeadersMessage = RandomState<block_header::GetBlockHeadersMessage>;
+impl Generator for GetBlockHeadersMessage {
+    type Item = block_header::GetBlockHeadersMessage;
+    fn make(&mut self) -> Self::Item {
+        let max_elements = limits::GET_BLOCK_HEADERS_MAX_LENGTH;
+        let block_hash = Hash::<crypto::hash::BlockHash> {
+            0: RandomState::from(self)
+        };
+        Self::Item::new(
+            iterable(block_hash)
+            .take(self.gen_range(1..max_elements)).collect()
+        )
+    }
+}
+
+type BlockHeaderMessage = RandomState<block_header::BlockHeaderMessage>;
+impl Generator for BlockHeaderMessage {
+    type Item = block_header::BlockHeaderMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::from(BlockHeader::from(self).make())
+    }
+}
+
+type GetOperationsMessage = RandomState<operation::GetOperationsMessage>;
+impl Generator for GetOperationsMessage {
+    type Item = operation::GetOperationsMessage;
+    fn make(&mut self) -> Self::Item {
+        let max_elements = limits::GET_OPERATIONS_MAX_LENGTH;
+        let operation_hash = Hash::<crypto::hash::OperationHash> {
+            0: RandomState::from(self)
+        };
+        Self::Item::new(
+            iterable(operation_hash)
+            .take(self.gen_range(1..max_elements)).collect()
+        )
+    }
+}
+
+
+type Operation = RandomState<operation::Operation>;
+impl Generator for Operation {
+    type Item = operation::Operation;
+    fn make(&mut self) -> Self::Item {
+        let max_size = limits::OPERATION_MAX_SIZE;
+        let max_data_size = max_size - crypto::hash::BlockHash::hash_size();
+        let data_size = self.gen_range(1..max_data_size);
+        let block_hash = Hash::<crypto::hash::BlockHash> {
+            0: RandomState::from(self)
+        }.make();
+        Self::Item::new(block_hash, self.gen_vec::<u8>(data_size))
+    }
+}
+
+type OperationMessage = RandomState<operation::OperationMessage>;
+impl Generator for OperationMessage {
+    type Item = operation::OperationMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::from(Operation::from(self).make())
+    }
+}
+
+type GetProtocolsMessage = RandomState<protocol::GetProtocolsMessage>;
+impl Generator for GetProtocolsMessage {
+    type Item = protocol::GetProtocolsMessage;
+    fn make(&mut self) -> Self::Item {
+        let max_elements = limits::GET_PROTOCOLS_MAX_LENGTH;
+        let protocol_hash = Hash::<crypto::hash::ProtocolHash> {
+            0: RandomState::from(self)
+        };
+        Self::Item::new(
+            iterable(protocol_hash)
+            .take(self.gen_range(1..max_elements)).collect()
+        )
+    }
+}
+
+type Component = RandomState<protocol::Component>;
+impl Generator for Component {
+    type Item = protocol::Component;
+    fn make(&mut self) -> Self::Item {
+        let mut remaining_size = limits::PROTOCOL_COMPONENT_MAX_SIZE;
+        let name_size = self.gen_range(0..remaining_size);
+        let name = self.gen_string(name_size);
+        remaining_size -= name.len();
+        let interface = match self.gen::<bool>() {
+            true => {
+                let interface_size = self.gen_range(0..remaining_size);
+                let iface = self.gen_string(interface_size);
+                remaining_size -= iface.len();
+                Some(iface)
+            },
+            false => None,
+        };
+        let implementation_size = self.gen_range(0..remaining_size);
+        let implementation = self.gen_string(implementation_size);
+        Self::Item::new(name, interface, implementation)
+    }
+}
+
+type Protocol = RandomState<protocol::Protocol>;
+impl Generator for Protocol {
+    type Item = protocol::Protocol;
+    fn make(&mut self) -> Self::Item {
+        let mut components: Vec<protocol::Component> = Vec::new();
+        let mut remaining_size = limits::PROTOCOL_COMPONENT_MAX_SIZE;
+
+        for component in iterable(Component::from(self)) {
+            let component_size = component.as_bytes().unwrap().len();
+            
+            if component_size > remaining_size {
+                break;
+            }
+            
+            remaining_size -= component_size;
+            components.push(component);
+        }
+
+        Self::Item::new(self.gen(), components)
+    }
+}
+
+
+type ProtocolMessage = RandomState<protocol::ProtocolMessage>;
+impl Generator for ProtocolMessage {
+    type Item = protocol::ProtocolMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::new(Protocol::from(self).make())
+    }
+}
+
 
 struct PeerAdvertise(RandomState<peer::PeerMessage>);
 impl Generator for PeerAdvertise {
@@ -262,6 +454,92 @@ impl Generator for PeerCurrentBranch {
         )
     }
 }
+struct PeerDeactivate(RandomState<peer::PeerMessage>);
+impl Generator for PeerDeactivate {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::Deactivate(
+            DeactivateMessage::from(&self.0).make()
+        )
+    }
+}
+struct PeerGetCurrentHead(RandomState<peer::PeerMessage>);
+impl Generator for PeerGetCurrentHead {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::GetCurrentHead(
+            GetCurrentHeadMessage::from(&self.0).make()
+        )
+    }
+}
+struct PeerCurrentHead(RandomState<peer::PeerMessage>);
+impl Generator for PeerCurrentHead {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::CurrentHead(
+            CurrentHeadMessage::from(&self.0).make()
+        )
+    }
+}
+
+struct PeerGetBlockHeaders(RandomState<peer::PeerMessage>);
+impl Generator for PeerGetBlockHeaders {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::GetBlockHeaders(
+            GetBlockHeadersMessage::from(&self.0).make()
+        )
+    }
+}
+
+struct PeerBlockHeader(RandomState<peer::PeerMessage>);
+impl Generator for PeerBlockHeader {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::BlockHeader(
+            BlockHeaderMessage::from(&self.0).make()
+        )
+    }
+}
+
+struct PeerGetOperations(RandomState<peer::PeerMessage>);
+impl Generator for PeerGetOperations {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::GetOperations(
+            GetOperationsMessage::from(&self.0).make()
+        )
+    }
+}
+
+struct PeerOperation(RandomState<peer::PeerMessage>);
+impl Generator for PeerOperation {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::Operation(
+            OperationMessage::from(&self.0).make()
+        )
+    }
+}
+
+struct PeerGetProtocols(RandomState<peer::PeerMessage>);
+impl Generator for PeerGetProtocols {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::GetProtocols(
+            GetProtocolsMessage::from(&self.0).make()
+        )
+    }
+}
+struct PeerProtocol(RandomState<peer::PeerMessage>);
+impl Generator for PeerProtocol {
+    type Item = peer::PeerMessage;
+    fn make(&mut self) -> Self::Item {
+        Self::Item::Protocol(
+            ProtocolMessage::from(&self.0).make()
+        )
+    }
+}
 
 #[derive(Clone)]
 pub struct Message(RandomState<peer::PeerMessage>);
@@ -274,13 +552,23 @@ impl Message {
 impl Generator for Message {
     type Item = peer::PeerMessage;
     fn make(&mut self) -> Self::Item {
-        let n = self.0.gen_range(0..5);
+        let n = self.0.gen_range(0..14);
         match n {
             0 => PeerAdvertise{ 0: RandomState::from(&self.0) }.make(),
             1 => PeerSwapRequest{ 0: RandomState::from(&self.0) }.make(),
             2 => PeerSwapAck{ 0: RandomState::from(&self.0) }.make(),
             3 => PeerGetCurrentBranch{ 0: RandomState::from(&self.0) }.make(),
-            _ => PeerCurrentBranch{ 0: RandomState::from(&self.0) }.make(),
+            4 => PeerCurrentBranch{ 0: RandomState::from(&self.0) }.make(),
+            5 => PeerDeactivate{ 0: RandomState::from(&self.0) }.make(),
+            6 => PeerGetCurrentHead{ 0: RandomState::from(&self.0) }.make(),
+            7 => PeerCurrentHead{ 0: RandomState::from(&self.0) }.make(),
+            8 => PeerGetBlockHeaders{ 0: RandomState::from(&self.0) }.make(),
+            9 => PeerBlockHeader{ 0: RandomState::from(&self.0) }.make(),
+            10 => PeerGetOperations{ 0: RandomState::from(&self.0) }.make(),
+            11 => PeerOperation{ 0: RandomState::from(&self.0) }.make(),
+            12 => PeerGetProtocols{ 0: RandomState::from(&self.0) }.make(),
+            _ => PeerProtocol{ 0: RandomState::from(&self.0) }.make(),
+
         }
     }
 }

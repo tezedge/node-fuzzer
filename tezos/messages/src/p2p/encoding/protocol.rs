@@ -14,6 +14,11 @@ pub struct ProtocolMessage {
     protocol: Protocol,
 }
 
+impl ProtocolMessage {
+    pub fn new(protocol: Protocol) -> Self {
+        Self { protocol }
+    }
+}
 // -----------------------------------------------------------------------------------------------
 #[derive(Serialize, Deserialize, Debug, Clone, HasEncoding, NomReader)]
 pub struct Component {
@@ -22,6 +27,15 @@ pub struct Component {
     implementation: String,
 }
 
+impl Component {
+    pub fn new(
+        name: String,
+        interface: Option<String>, 
+        implementation: String
+    ) -> Self {
+        Self { name, interface, implementation }
+    }
+}
 // -----------------------------------------------------------------------------------------------
 #[derive(Serialize, Deserialize, Debug, Clone, HasEncoding, NomReader)]
 pub struct Protocol {
@@ -38,6 +52,10 @@ impl Protocol {
     pub fn components(&self) -> &Vec<Component> {
         &self.components
     }
+
+    pub fn new(expected_env_version: i16, components: Vec<Component>) -> Self {
+        Self { expected_env_version, components }
+    }
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -45,4 +63,10 @@ impl Protocol {
 pub struct GetProtocolsMessage {
     #[encoding(dynamic, list = "GET_PROTOCOLS_MAX_LENGTH")]
     get_protocols: Vec<ProtocolHash>,
+}
+
+impl GetProtocolsMessage {
+    pub fn new(get_protocols: Vec<ProtocolHash>) -> Self {
+        Self { get_protocols }
+    }
 }
