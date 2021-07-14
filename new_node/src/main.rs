@@ -1,8 +1,10 @@
 mod generator;
 use std::io;
+use clap::{Arg, App};
+use crypto::hash;
 use generator::Generator;
 use tezedge_state::DefaultEffects;
-use tezos_messages::p2p::binary_message::MessageHash;
+use tezos_messages::p2p::binary_message::{BinaryWrite, MessageHash};
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
@@ -83,15 +85,8 @@ fn logger(level: slog::Level) -> slog::Logger {
     slog::Logger::root(drain.filter_level(level).fuse(), slog::o!())
 }
 
-fn build_tezedge_state() -> TezedgeState {
-    // println!("generating identity...");
-    // let node_identity = Identity::generate(ProofOfWork::DEFAULT_TARGET).unwrap();
-    // dbg!(&node_identity);
-    // dbg!(node_identity.secret_key.as_ref().0);
-
+fn build_tezedge_state(peer: &str) -> TezedgeState {
     let node_identity = identity_1();
-
-    // println!("identity generated!");
     let mut tezedge_state = TezedgeState::new(
         logger(slog::Level::Trace),
         TezedgeConfig {
@@ -99,8 +94,10 @@ fn build_tezedge_state() -> TezedgeState {
             disable_mempool: true,
             private_node: false,
             min_connected_peers: 1,
-            /* WARNING: don't change these values
-            otherwise fuzzer might go into to real network */
+            /* 
+                WARNING: don't change these values
+                fuzzer might go into to real network!
+             */
             max_connected_peers: 1, 
             max_pending_peers: 1,
             max_potential_peers: 1,
@@ -119,18 +116,7 @@ fn build_tezedge_state() -> TezedgeState {
     let peer_addresses = HashSet::<_>::from_iter(
         [
             // Potential peers which state machine will try to connect to.
-            vec!["127.0.0.1:9732"]
-                .into_iter()
-                .map(|x| x.parse().unwrap())
-                .collect::<Vec<_>>(),
-            // fake peers, just for testing.
-            // (0..10000).map(|x| format!(
-            //         "{}.{}.{}.{}:12345",
-            //         (x / 256 / 256 / 256) % 256,
-            //         (x / 256 / 256) % 256,
-            //         (x / 256) % 256,
-            //         x % 256,
-            //     )).collect::<Vec<_>>(),
+            vec![peer].into_iter() .map(|x| x.parse().unwrap()) .collect::<Vec<_>>(),
         ]
         .concat()
         .into_iter(),
@@ -148,23 +134,38 @@ fn build_tezedge_state() -> TezedgeState {
 
 struct BadNode {
     throughput: usize,
-    generator: generator::Message,
+    generator: generator::RandomState,
     peer: Option<PeerAddress>,
     proposer: TezedgeProposer<MioEvents, DefaultEffects, MioManager>,
 }
 
+use tezos_messages::p2p::encoding::{
+    advertise,
+    block_header,
+    current_branch,
+    current_head,
+    deactivate, 
+    limits,
+    mempool, 
+    operation,
+    peer,
+    swap,
+    protocol,
+    operations_for_blocks,
+}; 
+
 impl BadNode {
-    pub fn new() -> Self {
+    pub fn new(peer: &str, generator: generator::RandomState) -> Self {
         BadNode {
-            throughput: 0x80000, // TODO: fix BrokenPipe error
-            generator: generator::Message::new([1; 32]),
+            throughput: 0x10000,
+            generator: generator,
             peer: None,
             proposer: TezedgeProposer::new(
                 TezedgeProposerConfig {
                     wait_for_events_timeout: Some(Duration::from_millis(250)),
                     events_limit: 1024,
                 },
-                build_tezedge_state(),
+                build_tezedge_state(peer),
                 // capacity is changed by events_limit.
                 MioEvents::new(),
                 MioManager::new(SERVER_PORT),
@@ -181,21 +182,59 @@ impl BadNode {
     }
 
     pub fn send_messages(&mut self) -> io::Result<()> {
-        let msg_generator = generator::iterable(self.generator.clone());
-        for msg in msg_generator.take(self.throughput) {
+        for _  in 0..self.throughput {
+            let msg = self.generator.gen();
             BadNode::send(&mut self.proposer, self.peer.unwrap(), msg)?;
         }
-
         Ok(())
     }
 
-    pub fn handle_response(&mut self, msg: PeerMessageResponse) {
+    pub fn handle_response(&mut self, msg: PeerMessageResponse) -> io::Result<()> {
         eprintln!("received message from {}, contents: {:?}", self.peer.unwrap(), msg.message);
-        /*
-        TODO: use incoming messages as feedback for the fuzzer
         match msg.message {
+            PeerMessage::GetCurrentBranch(current_branch::GetCurrentBranchMessage{chain_id}) => {
+                self.generator.set_chain_id(chain_id);
+                let msg: current_branch::CurrentBranchMessage = self.generator.gen();
+                eprintln!("sending CurrentBranch");
+                BadNode::send(
+                    &mut self.proposer,
+                    self.peer.unwrap(),
+                    PeerMessage::CurrentBranch(msg)
+                )
+            },
+            PeerMessage::GetBlockHeaders(bh) => {
+                for block_hash in bh.get_block_headers() {
+                    let state = self.generator.state();
+                    let bh = state.blocks.get(&block_hash).unwrap();
+                    let msg = block_header::BlockHeaderMessage::from(bh.clone());
+                    eprintln!("sending BlockHeader");                    
+                    BadNode::send(
+                        &mut self.proposer,
+                        self.peer.unwrap(),
+                        PeerMessage::BlockHeader(msg)
+                    )?; 
+                }
+                Ok(())
+            },
+            PeerMessage::GetOperationsForBlocks(ops) => {
+                for operations_for_block in ops.get_operations_for_blocks() {
+                    let msg = operations_for_blocks::OperationsForBlocksMessage::new(
+                        operations_for_block.clone(),
+                        self.generator.gen(),
+                        self.generator.gen()
+                    );
+            
+                    eprintln!("sending OperationsForBlocksMessage");
+                    BadNode::send(
+                        &mut self.proposer,
+                        self.peer.unwrap(),
+                        PeerMessage::OperationsForBlocks(msg)
+                    )?;        
+                }
+                Ok(())
+            },
+            _ => Ok(())
         }
-        */
     }
 
     pub fn handle_events(&mut self) -> io::Result<()> {
@@ -217,10 +256,10 @@ impl BadNode {
                 },
                 Notification::PeerBlacklisted {..} => {
                     return Err(io::Error::new(io::ErrorKind::ConnectionAborted,"Blacklisted"));
-                },
-                _ => {}
+                }
             }
         }
+        //Ok(())   
         match self.peer {
             Some(_peer) => self.send_messages(),
             _ => Ok(())
@@ -230,13 +269,59 @@ impl BadNode {
 
 
 fn main() {
+    let matches = App::new("Bad-Node")
+    .arg(Arg::with_name("peer")
+             .short("p")
+             .long("peer")
+             .takes_value(true)
+             .help("target peer address")
+             .default_value("127.0.0.1:9732")
+            )
+    .arg(Arg::with_name("seed")
+            .short("s")
+            .long("seed")
+            .takes_value(true)
+            .help("PRNG seed")
+            .default_value("123456789abcdef0")
+           )
+    .arg(Arg::with_name("messages")
+             .short("m")
+             .long("messages")
+             .multiple(true)
+             .takes_value(true)
+             .help("list of possible messages to generate")
+             .default_value("all")
+            )
+    .get_matches();
+
+    let peer = matches.value_of("peer").unwrap();
+    let seed = u64::from_str_radix(
+        matches.value_of("seed").unwrap(), 16
+    ).unwrap();
+    let mut messages: Vec<&str> = matches.values_of("messages").unwrap().collect();
+
+    if *messages.first().unwrap() == "all" {
+        messages.clear();
+        messages = vec![
+            "Advertise", "SwapRequest", "SwapAck", "GetCurrentBranch",
+            "CurrentBranch", "Deactivate", "GetCurrentHead", "CurrentHead",
+            "GetBlockHeaders", "BlockHeader", "GetOperations", "Operation",
+            "GetProtocols", "Protocol", "GetOperationsForBlocks", "OperationsForBlocks"
+        ];
+    }
+    let generator = generator::RandomState::new(
+        seed,
+        messages.iter().map(|x| {String::from(*x)}).collect()
+    );
+
     loop {
-        let mut node = BadNode::new();
+        let mut node = BadNode::new(peer, generator.clone());
 
         loop {
             match node.handle_events() {
                 Err(e) => {
                     eprintln!("ERROR: {}", e);
+                    //return;
                     break;
                 }
                 _ => {}
