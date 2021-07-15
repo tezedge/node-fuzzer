@@ -38,17 +38,17 @@ type BlocksMap = HashMap<crypto::hash::BlockHash, block_header::BlockHeader>;
 #[derive(Clone)]
 pub struct _RandomState {
     rng: SmallRng,
-    messages: Vec<String>,
+    blocks_limit: usize,
     pub blocks: BlocksMap,
     last_block: crypto::hash::BlockHash,
     chain_id: ChainId,
 }
 
 impl _RandomState {
-    pub fn new(seed: u64, messages: Vec<String>) -> Self {
+    pub fn new(seed: u64, blocks_limit: usize) -> Self {
         _RandomState {
             rng: SmallRng::seed_from_u64(seed),
-            messages: messages,
+            blocks_limit: blocks_limit,
             blocks: BlocksMap::new(),
             last_block: BlockHash::from_base58_check(
                 "BLockGenesisGenesisGenesisGenesisGenesisf79b5d1CoW2"
@@ -62,9 +62,9 @@ impl _RandomState {
 pub struct RandomState(Rc<RefCell<_RandomState>>);
 
 impl RandomState {
-    pub fn new(seed: u64, messages: Vec<String>) -> Self {
+    pub fn new(seed: u64, blocks_limit: usize) -> Self {
         RandomState {
-            0: Rc::new(RefCell::new(_RandomState::new(seed, messages)))
+            0: Rc::new(RefCell::new(_RandomState::new(seed, blocks_limit)))
         }
     }
 
@@ -227,13 +227,23 @@ impl Generator<current_branch::CurrentBranch> for RandomState {
         let predecessor = self.state().last_block.clone();
         let new_block = blockb.predecessor(predecessor).build().unwrap();
         let block_hash = Self::block_hash(&new_block);
-        eprintln!(
-            "New block hash {}, predecessor {}",
-            block_hash.clone().to_base58_check(),
-            new_block.predecessor().to_base58_check()
-        );
-        /* FIXME: add upper boundary for blocks map */
-        self.state().blocks.insert(block_hash.clone(), new_block.clone());
+        let state = self.state().clone();
+
+        if state.blocks_limit != 0 {
+            /* remove arbitrary block if map is full */
+            if state.blocks.len() == state.blocks_limit {
+                let arbitrary_key: Vec<&BlockHash> = state.blocks.keys().take(1).collect();
+                eprintln!("removing {} from blocks map", arbitrary_key[0].to_base58_check());
+                self.state().blocks.remove(arbitrary_key[0]);
+            }
+            eprintln!(
+                "New block hash {}, predecessor {}",
+                block_hash.clone().to_base58_check(),
+                new_block.predecessor().to_base58_check()
+            );    
+            self.state().blocks.insert(block_hash.clone(), new_block.clone());
+        }
+
         self.set_last_block_hash(block_hash);
         current_branch::CurrentBranch::new(new_block, history)
     }
@@ -461,28 +471,3 @@ impl Generator<operations_for_blocks::OperationsForBlocksMessage> for RandomStat
     }
 }
 
-impl Generator<peer::PeerMessage> for RandomState {
-    fn gen(&mut self) -> peer::PeerMessage {
-        let messages = self.state().messages.clone();
-        let index = self.gen_range(0..messages.len());
-
-        match &messages.get(index).unwrap()[..] {
-            "Advertise" => peer::PeerMessage::Advertise(self.gen()),
-            "SwapRequest" => peer::PeerMessage::SwapRequest(self.gen()),
-            "SwapAck" => peer::PeerMessage::SwapAck(self.gen()),
-            "GetCurrentBranch" => peer::PeerMessage::GetCurrentBranch(self.gen()),
-            "CurrentBranch" => peer::PeerMessage::CurrentBranch(self.gen()),
-            "Deactivate" => peer::PeerMessage::Deactivate(self.gen()),
-            "GetCurrentHead" => peer::PeerMessage::GetCurrentHead(self.gen()),
-            "CurrentHead" => peer::PeerMessage::CurrentHead(self.gen()),
-            "GetBlockHeaders" => peer::PeerMessage::GetBlockHeaders(self.gen()),
-            "BlockHeader" => peer::PeerMessage::BlockHeader(self.gen()),
-            "GetOperations" => peer::PeerMessage::GetOperations(self.gen()),
-            "Operation" => peer::PeerMessage::Operation(self.gen()),
-            "GetProtocols" => peer::PeerMessage::GetProtocols(self.gen()),
-            "Protocol" => peer::PeerMessage::Protocol(self.gen()),
-            "GetOperationsForBlocks" => peer::PeerMessage::GetOperationsForBlocks(self.gen()),
-            _ => peer::PeerMessage::OperationsForBlocks(self.gen())
-        }
-    }
-}

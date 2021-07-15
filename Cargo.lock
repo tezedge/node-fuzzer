@@ -2320,6 +2320,7 @@ dependencies = [
  "rand 0.8.4",
  "riker",
  "rlimit",
+ "serde 1.0.123",
  "serde_json",
  "slog",
  "slog-async",
