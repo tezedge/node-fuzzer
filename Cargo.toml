@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "generator",
+    "tester",
     "tla_sm",
     "tezedge_state",
     "ipc",

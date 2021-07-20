@@ -11,6 +11,9 @@ use rand::distributions::{
 };
 use std::{iter, net};
 
+use std::convert::TryInto;
+use hex::FromHex;
+
 use tezos_messages::p2p::binary_message::{BinaryWrite, MessageHash};
 use tezos_messages::p2p::encoding::{
     advertise,
@@ -25,6 +28,10 @@ use tezos_messages::p2p::encoding::{
     swap,
     protocol,
     operations_for_blocks,
+    connection,
+    version,
+    metadata,
+    ack
 }; 
 
 use crypto::{
@@ -217,7 +224,7 @@ impl Generator<block_header::BlockHeader> for RandomState {
 impl Generator<current_branch::CurrentBranch> for RandomState {
     fn gen(&mut self) -> current_branch::CurrentBranch {
         /* Current OOM bug is triggered when there is no history */
-        let history_len = 0; //self.gen_range(0..limits::CURRENT_BRANCH_HISTORY_MAX_LENGTH);
+        let history_len = self.gen_range(0..limits::CURRENT_BRANCH_HISTORY_MAX_LENGTH);
         let history: Vec<crypto::hash::BlockHash> = (0..history_len).map(|_|{
             let HashKind::<crypto::hash::BlockHash>{0: block_hash} = self.gen();
             block_hash
@@ -332,11 +339,11 @@ impl Generator<operation::GetOperationsMessage> for RandomState {
 impl Generator<operation::Operation> for RandomState {
     fn gen(&mut self) -> operation::Operation {
         let max_size = limits::OPERATION_MAX_SIZE - crypto::hash::BlockHash::hash_size() - 0x20;
-        let size = self.gen_range(0..max_size);
+        let size = max_size; //self.gen_range(0..max_size);
         let last_block = self.state().last_block.clone();      
         operation::Operation::new(
             last_block, // TODO: pick random block hashes?
-            self.gen_vec(size)
+            self.gen_vec(size) // TODO: Operation Message data generator!!
         )
     }
 }
@@ -471,3 +478,70 @@ impl Generator<operations_for_blocks::OperationsForBlocksMessage> for RandomStat
     }
 }
 
+impl Generator<version::NetworkVersion> for RandomState {
+    fn gen(&mut self) -> version::NetworkVersion {
+        let size = self.gen_range(0..limits::CHAIN_NAME_MAX_LENGTH);
+        let chain_name = self.gen_string(size);
+        version::NetworkVersion::new(chain_name, self.gen_t(), self.gen_t())
+    }
+}
+
+impl Generator<connection::ConnectionMessage> for RandomState {
+    fn gen(&mut self) -> connection::ConnectionMessage {
+        let public_key = self.gen_vec::<u8>(crypto::crypto_box::CRYPTO_KEY_SIZE);
+        let pow: [u8;crypto::proof_of_work::POW_SIZE] = self.gen_vec::<u8>(crypto::proof_of_work::POW_SIZE)
+        .as_slice().try_into().unwrap();
+        let nonce: [u8;crypto::nonce::NONCE_SIZE] = self.gen_vec::<u8>(crypto::nonce::NONCE_SIZE)
+        .as_slice().try_into().unwrap();     
+        connection::ConnectionMessage::try_new(
+            self.gen_t(),
+            &crypto::crypto_box::PublicKey::from_bytes(public_key).unwrap(),
+            &crypto::proof_of_work::ProofOfWork::from_hex(hex::encode(pow)).unwrap(),
+            crypto::nonce::Nonce::new(&nonce),
+            self.gen()
+        ).unwrap()
+    }
+}
+
+impl Generator<metadata::MetadataMessage> for RandomState {
+    fn gen(&mut self) -> metadata::MetadataMessage {
+        metadata::MetadataMessage::new(self.gen_t(), self.gen_t())
+    }
+}
+
+impl Generator<ack::NackInfo> for RandomState {
+    fn gen(&mut self) -> ack::NackInfo {
+        let motive = match self.gen_range(0..6) {
+            0 => ack::NackMotive::NoMotive,
+            1 => ack::NackMotive::TooManyConnections,
+            2 => ack::NackMotive::UnknownChainName,
+            3 => ack::NackMotive::DeprecatedP2pVersion,
+            4 => ack::NackMotive::DeprecatedDistributedDbVersion,
+            _ => ack::NackMotive::AlreadyConnected,
+        };
+        let mut remaining = limits::NACK_PEERS_MAX_LENGTH;//self.gen_range(0..limits::NACK_PEERS_MAX_LENGTH);
+        let mut peers: Vec<String> = Vec::new();
+        
+        loop {
+            if remaining == 0 {
+                break;
+            }
+            let size = limits::P2P_POINT_MAX_LENGTH; //self.gen_range(0..limits::P2P_POINT_MAX_LENGTH);
+            let name = self.gen_string(size);
+            remaining -= 1;
+            peers.push(name);
+        }
+
+        ack::NackInfo::new(motive, &peers)
+    }
+}
+
+impl Generator<ack::AckMessage> for RandomState {
+    fn gen(&mut self) -> ack::AckMessage {
+        match 2 /*self.gen_range(0..3)*/ {
+            0 => ack::AckMessage::Ack,
+            1 => ack::AckMessage::NackV0,
+            _ => ack::AckMessage::Nack(self.gen()),
+        }
+    }
+}

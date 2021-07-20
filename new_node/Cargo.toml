@@ -34,6 +34,7 @@ tezos_messages = { path = "../tezos/messages" }
 tezos_encoding = { path = "../tezos/encoding" }
 # tezos_wrapper = { path = "../tezos/wrapper" }
 networking = { path = "../networking" }
+generator = { path = "../generator" }
 # storage = { path = "../storage" }
 # shell = { path = "../shell" }
 # monitoring = { path = "../monitoring" }

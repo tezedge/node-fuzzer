@@ -1,4 +1,4 @@
-mod generator;
+//mod generator;
 use clap::{App, Arg};
 use generator::Generator;
 use serde::{Deserialize, Serialize};
