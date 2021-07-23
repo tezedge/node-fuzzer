@@ -1,5 +1,4 @@
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
 use std::str::FromStr;
 use rand::rngs::SmallRng;
@@ -9,7 +8,7 @@ use rand::distributions::{
     Distribution,
     uniform::{SampleRange, SampleUniform},
 };
-use std::{iter, net};
+use std::net;
 
 use std::convert::TryInto;
 use hex::FromHex;
@@ -35,19 +34,20 @@ use tezos_messages::p2p::encoding::{
 }; 
 
 use crypto::{
-    crypto_box::{CryptoKey, PublicKey, SecretKey},
+    crypto_box::{CryptoKey, PublicKey, SecretKey, CRYPTO_KEY_SIZE},
     hash::*,
-    proof_of_work::ProofOfWork,
+    proof_of_work::{ProofOfWork, POW_SIZE},
+    nonce::{Nonce, NONCE_SIZE}
 };
 
-type BlocksMap = HashMap<crypto::hash::BlockHash, block_header::BlockHeader>;
+type BlocksMap = HashMap<BlockHash, block_header::BlockHeader>;
 
 #[derive(Clone)]
 pub struct _RandomState {
     rng: SmallRng,
     blocks_limit: usize,
     pub blocks: BlocksMap,
-    last_block: crypto::hash::BlockHash,
+    last_block: BlockHash,
     chain_id: ChainId,
 }
 
@@ -66,12 +66,12 @@ impl _RandomState {
 }
 
 #[derive(Clone)]
-pub struct RandomState(Rc<RefCell<_RandomState>>);
+pub struct RandomState(Arc<Mutex<_RandomState>>);
 
 impl RandomState {
     pub fn new(seed: u64, blocks_limit: usize) -> Self {
         RandomState {
-            0: Rc::new(RefCell::new(_RandomState::new(seed, blocks_limit)))
+            0: Arc::new(Mutex::new(_RandomState::new(seed, blocks_limit)))
         }
     }
 
@@ -79,11 +79,11 @@ impl RandomState {
     where
         T: SampleUniform,
         R: SampleRange<T> {
-        self.0.borrow_mut().rng.gen_range::<T, R>(range)
+        self.0.lock().unwrap().rng.gen_range::<T, R>(range)
     }
 
     pub fn gen_t<T>(&mut self) -> T where Standard: Distribution<T> {
-        self.0.borrow_mut().rng.gen::<T>()
+        self.0.lock().unwrap().rng.gen::<T>()
     }
 
     fn gen_vec<T>(&mut self, size: usize) -> Vec<T>
@@ -106,23 +106,23 @@ impl RandomState {
     }
 
     pub fn get_chain_id(&mut self) -> ChainId {
-        self.0.borrow_mut().chain_id.clone()
+        self.0.lock().unwrap().chain_id.clone()
     }
 
     pub fn set_chain_id(&mut self, chain_id: ChainId) {
-        self.0.borrow_mut().chain_id = chain_id
+        self.0.lock().unwrap().chain_id = chain_id
     }
 
-    fn block_hash(bh: &block_header::BlockHeader) -> crypto::hash::BlockHash {
+    fn block_hash(bh: &block_header::BlockHeader) -> BlockHash {
         let hash = bh.message_hash().unwrap();
-        crypto::hash::BlockHash::try_from_bytes(&hash[..]).unwrap()
+        BlockHash::try_from_bytes(&hash[..]).unwrap()
     }
 
-    pub fn state(&mut self) -> std::cell::RefMut<_RandomState> {
-        self.0.borrow_mut()
+    pub fn state(&mut self) -> MutexGuard<_RandomState> {
+        self.0.lock().unwrap()
     }
 
-    fn set_last_block_hash(&mut self, hash: crypto::hash::BlockHash) {
+    fn set_last_block_hash(&mut self, hash: BlockHash) {
         self.state().last_block = hash;
     }
 }
@@ -166,14 +166,14 @@ impl Generator<swap::SwapMessage> for RandomState {
     fn gen(&mut self) -> swap::SwapMessage {
         //let point = "127.0.0.1:12345".to_string();
         let size_bytes = self.gen_range(0..limits::P2P_POINT_MAX_LENGTH);
-        let peer_id: HashKind<crypto::hash::CryptoboxPublicKeyHash> = self.gen();
+        let peer_id: HashKind<CryptoboxPublicKeyHash> = self.gen();
         swap::SwapMessage::new(self.gen_string(size_bytes), peer_id.0)
     }
 }
 
 impl Generator<current_branch::GetCurrentBranchMessage> for RandomState {
     fn gen(&mut self) -> current_branch::GetCurrentBranchMessage {
-        let chain_id: HashKind<crypto::hash::ChainId> = self.gen();
+        let chain_id: HashKind<ChainId> = self.gen();
         current_branch::GetCurrentBranchMessage::new(chain_id.0)
     }
 }
@@ -197,9 +197,9 @@ impl Generator<block_header::BlockHeaderBuilder> for RandomState {
         }
 
         let data_len = self.gen_range(1..remaining);
-        let predecessor: HashKind<crypto::hash::BlockHash> = self.gen();
-        let operations_hash: HashKind<crypto::hash::OperationListListHash> = self.gen();
-        let context: HashKind<crypto::hash::ContextHash> = self.gen();
+        let predecessor: HashKind<BlockHash> = self.gen();
+        let operations_hash: HashKind<OperationListListHash> = self.gen();
+        let context: HashKind<ContextHash> = self.gen();
 
         let mut b = block_header::BlockHeaderBuilder::default();
         b.level(self.gen_t())
@@ -225,8 +225,8 @@ impl Generator<current_branch::CurrentBranch> for RandomState {
     fn gen(&mut self) -> current_branch::CurrentBranch {
         /* Current OOM bug is triggered when there is no history */
         let history_len = self.gen_range(0..limits::CURRENT_BRANCH_HISTORY_MAX_LENGTH);
-        let history: Vec<crypto::hash::BlockHash> = (0..history_len).map(|_|{
-            let HashKind::<crypto::hash::BlockHash>{0: block_hash} = self.gen();
+        let history: Vec<BlockHash> = (0..history_len).map(|_|{
+            let HashKind::<BlockHash>{0: block_hash} = self.gen();
             block_hash
         }).collect();
         
@@ -267,7 +267,7 @@ impl Generator<current_branch::CurrentBranchMessage> for RandomState {
 impl Generator<deactivate::DeactivateMessage> for RandomState {
     fn gen(&mut self) -> deactivate::DeactivateMessage {
         // TODO: randomly use self.chain_id() too?
-        let chain_id: HashKind<crypto::hash::ChainId> = self.gen();
+        let chain_id: HashKind<ChainId> = self.gen();
         deactivate::DeactivateMessage::new(chain_id.0)
     }
 }
@@ -275,7 +275,7 @@ impl Generator<deactivate::DeactivateMessage> for RandomState {
 impl Generator<current_head::GetCurrentHeadMessage> for RandomState {
     fn gen(&mut self) -> current_head::GetCurrentHeadMessage {
         // TODO: ask about existing chains?
-        let chain_id: HashKind<crypto::hash::ChainId> = self.gen();
+        let chain_id: HashKind<ChainId> = self.gen();
         current_head::GetCurrentHeadMessage::new(chain_id.0)
     }
 }
@@ -285,12 +285,12 @@ impl Generator<mempool::Mempool> for RandomState {
         let max_count = limits::MEMPOOL_MAX_OPERATIONS;
         let pending_num = self.gen_range(1..max_count);
         let known_valid_num = self.gen_range(0..max_count-pending_num);
-        let pending: Vec<crypto::hash::OperationHash> = (0..pending_num).map(|_|{
-            let HashKind::<crypto::hash::OperationHash>{0: op_hash} = self.gen();
+        let pending: Vec<OperationHash> = (0..pending_num).map(|_|{
+            let HashKind::<OperationHash>{0: op_hash} = self.gen();
             op_hash
         }).collect();
-        let known_valid: Vec<crypto::hash::OperationHash> = (0..known_valid_num).map(|_|{
-            let HashKind::<crypto::hash::OperationHash>{0: op_hash} = self.gen();
+        let known_valid: Vec<OperationHash> = (0..known_valid_num).map(|_|{
+            let HashKind::<OperationHash>{0: op_hash} = self.gen();
             op_hash
         }).collect();
         mempool::Mempool::new(known_valid, pending)
@@ -310,8 +310,8 @@ impl Generator<current_head::CurrentHeadMessage> for RandomState {
 impl Generator<block_header::GetBlockHeadersMessage> for RandomState {
     fn gen(&mut self) -> block_header::GetBlockHeadersMessage {
         let count = self.gen_range(0..limits::GET_BLOCK_HEADERS_MAX_LENGTH);
-        let block_hashes: Vec<crypto::hash::BlockHash> = (0..count).map(|_|{
-            let HashKind::<crypto::hash::BlockHash>{0: block_hash} = self.gen();
+        let block_hashes: Vec<BlockHash> = (0..count).map(|_|{
+            let HashKind::<BlockHash>{0: block_hash} = self.gen();
             block_hash
         }).collect();
         block_header::GetBlockHeadersMessage::new(block_hashes)
@@ -328,8 +328,8 @@ impl Generator<block_header::BlockHeaderMessage> for RandomState {
 impl Generator<operation::GetOperationsMessage> for RandomState {
     fn gen(&mut self) -> operation::GetOperationsMessage {
         let count = self.gen_range(0..limits::GET_OPERATIONS_MAX_LENGTH);
-        let operations: Vec<crypto::hash::OperationHash> = (0..count).map(|_|{
-            let HashKind::<crypto::hash::OperationHash>{0: op_hash} = self.gen();
+        let operations: Vec<OperationHash> = (0..count).map(|_|{
+            let HashKind::<OperationHash>{0: op_hash} = self.gen();
             op_hash
         }).collect();
         operation::GetOperationsMessage::new(operations)
@@ -338,7 +338,7 @@ impl Generator<operation::GetOperationsMessage> for RandomState {
 
 impl Generator<operation::Operation> for RandomState {
     fn gen(&mut self) -> operation::Operation {
-        let max_size = limits::OPERATION_MAX_SIZE - crypto::hash::BlockHash::hash_size() - 0x20;
+        let max_size = limits::OPERATION_MAX_SIZE - BlockHash::hash_size() - 0x20;
         let size = max_size; //self.gen_range(0..max_size);
         let last_block = self.state().last_block.clone();      
         operation::Operation::new(
@@ -358,8 +358,8 @@ impl Generator<operation::OperationMessage> for RandomState {
 impl Generator<protocol::GetProtocolsMessage> for RandomState {
     fn gen(&mut self) -> protocol::GetProtocolsMessage {
         let count = self.gen_range(0..limits::GET_PROTOCOLS_MAX_LENGTH);
-        let get_protocols: Vec<crypto::hash::ProtocolHash> = (0..count).map(|_|{
-            let HashKind::<crypto::hash::ProtocolHash>{0: protocol_hash} = self.gen();
+        let get_protocols: Vec<ProtocolHash> = (0..count).map(|_|{
+            let HashKind::<ProtocolHash>{0: protocol_hash} = self.gen();
             protocol_hash
         }).collect();
         protocol::GetProtocolsMessage::new(get_protocols)
@@ -409,7 +409,7 @@ impl Generator<protocol::Protocol> for RandomState {
 
 impl Generator<operations_for_blocks::OperationsForBlock> for RandomState {
     fn gen(&mut self) -> operations_for_blocks::OperationsForBlock {
-        let block_hash: HashKind<crypto::hash::BlockHash> = self.gen();
+        let block_hash: HashKind<BlockHash> = self.gen();
         operations_for_blocks::OperationsForBlock::new(
             block_hash.0, self.gen_t()
         )
@@ -486,18 +486,36 @@ impl Generator<version::NetworkVersion> for RandomState {
     }
 }
 
+impl Generator<PublicKey> for RandomState {
+    fn gen(&mut self) -> PublicKey {
+        let public_key = self.gen_vec::<u8>(CRYPTO_KEY_SIZE);
+        PublicKey::from_bytes(public_key).unwrap()
+    }
+}
+
+impl Generator<ProofOfWork> for RandomState {
+    fn gen(&mut self) -> ProofOfWork {
+        let pow: [u8;POW_SIZE] = self.gen_vec::<u8>(POW_SIZE)
+        .as_slice().try_into().unwrap();
+        ProofOfWork::from_hex(hex::encode(pow)).unwrap()
+    }
+}
+
+impl Generator<Nonce> for RandomState {
+    fn gen(&mut self) -> Nonce {
+        let nonce: [u8;NONCE_SIZE] = self.gen_vec::<u8>(NONCE_SIZE)
+        .as_slice().try_into().unwrap();
+        Nonce::new(&nonce)
+    }
+}
+
 impl Generator<connection::ConnectionMessage> for RandomState {
     fn gen(&mut self) -> connection::ConnectionMessage {
-        let public_key = self.gen_vec::<u8>(crypto::crypto_box::CRYPTO_KEY_SIZE);
-        let pow: [u8;crypto::proof_of_work::POW_SIZE] = self.gen_vec::<u8>(crypto::proof_of_work::POW_SIZE)
-        .as_slice().try_into().unwrap();
-        let nonce: [u8;crypto::nonce::NONCE_SIZE] = self.gen_vec::<u8>(crypto::nonce::NONCE_SIZE)
-        .as_slice().try_into().unwrap();     
-        connection::ConnectionMessage::try_new(
+            connection::ConnectionMessage::try_new(
             self.gen_t(),
-            &crypto::crypto_box::PublicKey::from_bytes(public_key).unwrap(),
-            &crypto::proof_of_work::ProofOfWork::from_hex(hex::encode(pow)).unwrap(),
-            crypto::nonce::Nonce::new(&nonce),
+            &self.gen(),
+            &self.gen(),
+            self.gen(),
             self.gen()
         ).unwrap()
     }
@@ -519,14 +537,14 @@ impl Generator<ack::NackInfo> for RandomState {
             4 => ack::NackMotive::DeprecatedDistributedDbVersion,
             _ => ack::NackMotive::AlreadyConnected,
         };
-        let mut remaining = limits::NACK_PEERS_MAX_LENGTH;//self.gen_range(0..limits::NACK_PEERS_MAX_LENGTH);
+        let mut remaining = self.gen_range(0..limits::NACK_PEERS_MAX_LENGTH);
         let mut peers: Vec<String> = Vec::new();
         
         loop {
             if remaining == 0 {
                 break;
             }
-            let size = limits::P2P_POINT_MAX_LENGTH; //self.gen_range(0..limits::P2P_POINT_MAX_LENGTH);
+            let size = self.gen_range(0..limits::P2P_POINT_MAX_LENGTH);
             let name = self.gen_string(size);
             remaining -= 1;
             peers.push(name);
@@ -538,7 +556,7 @@ impl Generator<ack::NackInfo> for RandomState {
 
 impl Generator<ack::AckMessage> for RandomState {
     fn gen(&mut self) -> ack::AckMessage {
-        match 2 /*self.gen_range(0..3)*/ {
+        match self.gen_range(0..3) {
             0 => ack::AckMessage::Ack,
             1 => ack::AckMessage::NackV0,
             _ => ack::AckMessage::Nack(self.gen()),
