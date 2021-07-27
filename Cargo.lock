@@ -286,6 +286,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "badnode"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "crypto",
+ "fdlimit",
+ "futures",
+ "generator 0.0.0",
+ "hex",
+ "logging",
+ "networking",
+ "rand 0.8.4",
+ "serde 1.0.123",
+ "serde_json",
+ "structopt",
+ "tezos_encoding",
+ "tezos_identity",
+ "tezos_messages",
+ "tokio",
+]
+
+[[package]]
 name = "base58"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1568,29 +1591,6 @@ name = "half"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62aca2aba2d62b4a7f5b33f3712cb1b0692779a56fb510499d5c0aa594daeaf3"
-
-[[package]]
-name = "handshake_fuzz"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "crypto",
- "fdlimit",
- "futures",
- "generator 0.0.0",
- "hex",
- "logging",
- "networking",
- "rand 0.8.4",
- "serde 1.0.123",
- "serde_json",
- "structopt",
- "tezos_encoding",
- "tezos_identity",
- "tezos_messages",
- "tokio",
-]
 
 [[package]]
 name = "hashbrown"

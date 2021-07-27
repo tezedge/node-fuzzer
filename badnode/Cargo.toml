@@ -1,5 +1,5 @@
 [package]
-name = "handshake_fuzz"
+name = "badnode"
 version = "0.1.0"
 authors = ["Daniel K <daniel.kuehr@viablesystems.io>"]
 edition = "2018"

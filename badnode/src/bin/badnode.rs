@@ -1,33 +1,36 @@
 use clap::{App, Arg};
-use serde::{Deserialize, Serialize};
+use generator::{Generator, RandomState};
 use hex::FromHex;
-use generator::{RandomState, Generator};
+use serde::{Deserialize, Serialize};
 use tezos_messages::p2p::binary_message;
+use tezos_messages::p2p::encoding::{block_header, current_branch, operations_for_blocks};
+use tokio::runtime::Handle;
 
+use futures::future::join_all;
 use std::borrow::Borrow;
+use std::convert::{TryFrom, TryInto};
+use std::io::{Error, ErrorKind, Read, Result};
 use std::sync::Arc;
-use std::convert::{TryInto, TryFrom};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
-use futures::future::join_all;
-use std::io::{Error, ErrorKind, Read, Result};
 
 use crypto::{
-    nonce::{Nonce, NoncePair, generate_nonces},
-    hash::CryptoboxPublicKeyHash,
-    proof_of_work::ProofOfWork,
     crypto_box::{CryptoKey, PrecomputedKey, PublicKey, SecretKey},
+    hash::CryptoboxPublicKeyHash,
+    nonce::{generate_nonces, Nonce, NoncePair},
+    proof_of_work::ProofOfWork,
 };
 use tezos_identity::Identity;
 use tezos_messages::p2p::{
-    binary_message::{BinaryMessage, BinaryChunk, BinaryRead, BinaryWrite},
+    binary_message::{BinaryChunk, BinaryMessage, BinaryRead, BinaryWrite},
     encoding::{
-        connection::ConnectionMessage,
-        version::NetworkVersion,
-        metadata::MetadataMessage,
         ack::AckMessage,
-        peer::{PeerMessage, PeerMessageResponse},    
+        connection::ConnectionMessage,
+        current_branch::GetCurrentBranchMessage,
+        metadata::MetadataMessage,
+        peer::{PeerMessage, PeerMessageResponse},
+        version::NetworkVersion,
     },
 };
 
@@ -44,7 +47,7 @@ struct ChunkOptions {
     split_chunks: bool,         // split a message into multiple chunks
     split_bytes: bool,          // split sending of chunk bytes into multiple slices
     incomplete_send: bool,      // randomly abort in the middle of sending bytes slices
-    max_write_bytes_sleep: u64  // randomly sleep between sending byte slices
+    max_write_bytes_sleep: u64, // randomly sleep between sending byte slices
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -56,17 +59,17 @@ struct HandshakeOptions {
     max_connect_msg_sleep: u64, // max random sleep after connect message
     fuzz_public_key: bool,      // enable/disable public key fuzzing
     fuzz_pow: bool,             // enable/disable Proof Of Work fuzzing
-    fuzz_network_version: bool, // enable/disable protocol version fuzzing 
+    fuzz_network_version: bool, // enable/disable protocol version fuzzing
     // metadata message options
     abort_before_metadata: bool, // randomly abort before sending metadata message
     max_metadata_msg_sleep: u64, // max random sleep after metadata message
     always_recv_metadata: bool,  // attempt to recv metadata message from peer
     fuzz_metadata: bool,         // enable/disable metadata fuzzing
     // ack message options
-    abort_before_ack: bool,      // randomly abort before sending ack message
-    max_ack_msg_sleep: u64,      // max random sleep after ack message
-    ack_replies: Vec<String>,    // possible replies to generate randomly: Ack, NackV0, Nack
-    always_recv_ack: bool        // attempt to recv ack message from peer
+    abort_before_ack: bool,   // randomly abort before sending ack message
+    max_ack_msg_sleep: u64,   // max random sleep after ack message
+    ack_replies: Vec<String>, // possible replies to generate randomly: Ack, NackV0, Nack
+    always_recv_ack: bool,    // attempt to recv ack message from peer
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -79,14 +82,15 @@ struct PeerMessageReplyOptions {
 #[derive(Clone, Serialize, Deserialize)]
 struct PeerMessageOptions {
     chunk_options: ChunkOptions,
+    messages_per_chunk: u64, // default: 1, merge more than one message per chunk
     push_messages: Vec<String>, // possible messages send randomly to target: Advertise,
-                                // SwapRequest, SwapAck, GetCurrentBranch, CurrentBranch,
-                                // Deactivate, GetCurrentHead, CurrentHead, GetBlockHeaders,
-                                // BlockHeader, GetOperations, Operation, GetProtocols, 
-                                // Protocol, GetOperationsForBlocks, OperationsForBlocks    
-    push_throughput: u64,       // number of messages send in burst
-    block_header_limit: usize,  // max block-header cache size
-    reply_options: Option<PeerMessageReplyOptions>
+    // SwapRequest, SwapAck, GetCurrentBranch, CurrentBranch,
+    // Deactivate, GetCurrentHead, CurrentHead, GetBlockHeaders,
+    // BlockHeader, GetOperations, Operation, GetProtocols,
+    // Protocol, GetOperationsForBlocks, OperationsForBlocks
+    push_throughput: u64,      // number of messages send in burst
+    block_header_limit: usize, // max block-header cache size
+    reply_options: Option<PeerMessageReplyOptions>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -94,9 +98,10 @@ struct Profile {
     id: Credentials,
     peer: String,
     prng_seed: u64,
+    max_chunk_size: usize,
     threads: u64,
     handshake_fuzzing: Option<HandshakeOptions>, // if null generate valid handshakes
-    peer_message_fuzzing: Option<PeerMessageOptions>
+    peer_message_fuzzing: Option<PeerMessageOptions>,
 }
 
 static DEFAULT_PROFILE: &'static str = r#"
@@ -109,7 +114,8 @@ static DEFAULT_PROFILE: &'static str = r#"
     },
     "peer": "127.0.0.1:9732",
     "prng_seed": 1234567890,
-    "threads": 60000,
+    "max_chunk_size": 65519,
+    "threads": 1,
     "handshake_fuzzing": null,
     "peer_message_fuzzing": {
         "chunk_options": {
@@ -118,6 +124,7 @@ static DEFAULT_PROFILE: &'static str = r#"
             "incomplete_send": false,
             "max_write_bytes_sleep": 0
         },
+        "messages_per_chunk": 1,
         "push_messages": [
             "Advertise",
             "SwapRequest",
@@ -142,7 +149,6 @@ static DEFAULT_PROFILE: &'static str = r#"
     }
 }"#;
 
-
 async fn rand_sleep(max_duration: u64, generator: &mut generator::RandomState) {
     if max_duration > 0 {
         sleep(Duration::from_millis(generator.gen_range(0..max_duration))).await;
@@ -151,7 +157,7 @@ async fn rand_sleep(max_duration: u64, generator: &mut generator::RandomState) {
 
 pub struct ChunkBuffer {
     len: usize,
-    data:[u8; 0x10000],
+    data: [u8; 0x10000],
 }
 
 impl Default for ChunkBuffer {
@@ -169,20 +175,20 @@ impl ChunkBuffer {
         let mut retry = 0;
         loop {
             self.len += stream.read(&mut self.data[self.len..]).await?;
-           
+
             if self.len == 0 {
                 if retry > 2 {
                     return Err(Error::new(ErrorKind::UnexpectedEof, "zero length read"));
                 }
-                
+
                 retry += 1;
-                sleep(Duration::from_millis(100)).await;                
+                sleep(Duration::from_millis(200)).await;
             }
 
             if self.len >= HEADER_LENGTH {
                 let chunk_len = u16::from_be_bytes([self.data[0], self.data[1]]) as usize;
                 let raw_len = chunk_len + HEADER_LENGTH;
-            
+
                 if self.len >= raw_len {
                     let chunk = self.data[..(raw_len)].to_vec();
                     for i in raw_len..self.len {
@@ -190,7 +196,7 @@ impl ChunkBuffer {
                     }
                     self.len -= raw_len;
 
-                    return Ok(chunk.try_into().unwrap())
+                    return Ok(chunk.try_into().unwrap());
                 }
             }
         }
@@ -207,9 +213,9 @@ async fn write_bytes(
     bytes: &Vec<u8>,
     stream: &mut TcpStream,
 ) -> Result<()> {
-    let chunks = match options.split_bytes && generator.gen_t::<bool>(){
+    let chunks = match options.split_bytes && generator.gen_t::<bool>() {
         true => generator.gen_byte_chunks(bytes.clone()),
-        false => vec![bytes.clone()]
+        false => vec![bytes.clone()],
     };
 
     let incomplete_send = options.incomplete_send && generator.gen_t::<bool>();
@@ -218,7 +224,7 @@ async fn write_bytes(
         stream.write_all(chunk.as_slice()).await?;
 
         if incomplete_send && generator.gen_t::<bool>() {
-            return Ok(())
+            return Ok(());
         }
 
         rand_sleep(options.max_write_bytes_sleep, generator).await;
@@ -233,18 +239,20 @@ async fn write_bytes_encrypted(
     bytes: &Vec<u8>,
     stream: &mut TcpStream,
     key: &PrecomputedKey,
-    nonce: &mut Nonce
+    nonce: &mut Nonce,
 ) -> Result<()> {
     const MACBYTES: usize = 16;
-    let chunks = match options.split_chunks && generator.gen_t::<bool>(){
+    let chunks = match options.split_chunks && generator.gen_t::<bool>() {
         true => generator.gen_chunks(bytes.clone(), key, nonce),
-        false => bytes.as_slice()
+        false => bytes
+            .as_slice()
             .chunks(binary_message::CONTENT_LENGTH_MAX - MACBYTES)
             .map(|x| {
                 let bytes = key.encrypt(x, nonce).unwrap();
                 *nonce = nonce.increment();
                 BinaryChunk::from_content(&bytes).unwrap().clone()
-            }).collect(),
+            })
+            .collect(),
     };
 
     for chunk in chunks {
@@ -260,9 +268,11 @@ async fn write_msg<M>(
     msg: &M,
     stream: &mut TcpStream,
     key: &PrecomputedKey,
-    nonce: &mut Nonce
+    nonce: &mut Nonce,
 ) -> Result<()>
-where M: BinaryMessage {
+where
+    M: BinaryMessage,
+{
     let bytes = msg.as_bytes().unwrap();
     write_bytes_encrypted(options, generator, &bytes, stream, key, nonce).await?;
     Ok(())
@@ -273,9 +283,10 @@ async fn read_msg<M>(
     buffer: &mut ChunkBuffer,
     key: &PrecomputedKey,
     nonce: &mut Nonce,
-    peer_message: bool
+    peer_message: bool,
 ) -> Result<M>
-where M: BinaryMessage
+where
+    M: BinaryMessage,
 {
     const HEADER_LENGTH: usize = 4;
     let mut bytes = Vec::new();
@@ -298,22 +309,35 @@ where M: BinaryMessage
         *nonce = nonce.increment();
 
         if bytes.len() == length || !peer_message {
-            return Ok(M::from_bytes(bytes).unwrap())
+            let m = M::from_bytes(&bytes);
+
+            if !m.is_err() {
+                return Ok(m.unwrap());
+            }
         }
     }
 }
 
 async fn fuzz_peer_messages(
     options: &PeerMessageOptions,
-    generator: &mut generator::RandomState, 
-    stream: &mut TcpStream, 
+    generator: &mut generator::RandomState,
+    stream: &mut TcpStream,
     key: &PrecomputedKey,
     local: &mut Nonce,
-    remote: &mut Nonce) -> Result<()> {
-        let messages = &options.push_messages;
-        eprintln!("Pushing {} messages in burst...", options.push_throughput);
+) -> Result<()> {
+    let messages = &options.push_messages;
+    let mut remaining = options.push_throughput;
+    eprintln!("Pushing {} messages in burst...", options.push_throughput);
 
-        for _ in 0..options.push_throughput {
+    loop {
+        if options.messages_per_chunk > remaining {
+            break;
+        }
+
+        remaining -= options.messages_per_chunk;
+        let mut msg_batch: Vec<u8> = Vec::new();
+
+        for _ in 0..options.messages_per_chunk {
             let index = generator.gen_range(0..messages.len());
             let msg = match &messages.get(index).unwrap()[..] {
                 "Advertise" => PeerMessage::Advertise(generator.gen()),
@@ -335,45 +359,126 @@ async fn fuzz_peer_messages(
                 _ => panic!("Invalid message"),
             };
             //eprintln!("msg {:?}",  msg.get_type());
-            let msg = PeerMessageResponse::from(msg);
-            write_msg(&options.chunk_options, generator, &msg, stream, &key,local).await?;
+            msg_batch.append(&mut PeerMessageResponse::from(msg).as_bytes().unwrap());
+        }
+
+        write_bytes_encrypted(
+            &options.chunk_options,
+            generator,
+            &msg_batch,
+            stream,
+            &key,
+            local,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn handle_response(
+    options: &PeerMessageOptions,
+    generator: &mut generator::RandomState,
+    stream: &mut TcpStream,
+    key: &PrecomputedKey,
+    local: &mut Nonce,
+    remote: &mut Nonce,
+    buffer: &mut ChunkBuffer,
+) -> Result<()> {
+    if let Some(reply_options) = options.reply_options.clone() {
+        let m = read_msg::<PeerMessageResponse>(stream, buffer, &key, remote, true).await?;
+        eprintln!("recv msg {:?}", m);
+        match m.message {
+            PeerMessage::GetCurrentBranch(current_branch::GetCurrentBranchMessage { chain_id }) => {
+                if reply_options.get_current_branch {
+                    generator.set_chain_id(chain_id);
+                    let msg: current_branch::CurrentBranchMessage = generator.gen();
+                    eprintln!("sending CurrentBranch");
+                    write_msg(
+                        &options.chunk_options,
+                        generator,
+                        &PeerMessageResponse::from(msg),
+                        stream,
+                        &key,
+                        local,
+                    )
+                    .await?;
+                }
+            }
+            PeerMessage::GetBlockHeaders(bh) => {
+                if reply_options.get_block_headers {
+                    for block_hash in bh.get_block_headers() {
+                        let msg = generator.get_block(block_hash);
+                        eprintln!("sending BlockHeader");
+                        write_msg(
+                            &options.chunk_options,
+                            generator,
+                            &PeerMessageResponse::from(msg),
+                            stream,
+                            &key,
+                            local,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            PeerMessage::GetOperationsForBlocks(ops) => {
+                if reply_options.get_operations_for_blocks {
+                    for operations_for_block in ops.get_operations_for_blocks() {
+                        let msg = operations_for_blocks::OperationsForBlocksMessage::new(
+                            operations_for_block.clone(),
+                            generator.gen(),
+                            generator.gen(),
+                        );
+                        eprintln!("sending OperationsForBlocksMessage");
+                        write_msg(
+                            &options.chunk_options,
+                            generator,
+                            &PeerMessageResponse::from(msg),
+                            stream,
+                            &key,
+                            local,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            _ => (),
+        }
     }
 
     Ok(())
 }
 
-async fn fuzz_handshake(profile: &Profile, mut generator: generator::RandomState) -> Result<()> {
+async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Result<()> {
     let options = match profile.handshake_fuzzing.clone() {
-        None => {
-            HandshakeOptions {
-                chunk_options: ChunkOptions {
-                    split_chunks: false,
-                    split_bytes: false,
-                    incomplete_send: false,
-                    max_write_bytes_sleep: 0
-                },
-                abort_before_connect: false,
-                max_connect_sleep: 0,
-                max_connect_msg_sleep: 0,
-                fuzz_public_key: false,
-                fuzz_pow: false,
-                fuzz_network_version: false,
-                abort_before_metadata: false,
-                max_metadata_msg_sleep: 0,
-                always_recv_metadata: true,
-                fuzz_metadata: false,
-                abort_before_ack: false,
-                max_ack_msg_sleep: 0,
-                ack_replies: vec![String::from("Ack")],
-                always_recv_ack: true
-            }   
+        None => HandshakeOptions {
+            chunk_options: ChunkOptions {
+                split_chunks: false,
+                split_bytes: false,
+                incomplete_send: false,
+                max_write_bytes_sleep: 0,
+            },
+            abort_before_connect: false,
+            max_connect_sleep: 0,
+            max_connect_msg_sleep: 0,
+            fuzz_public_key: false,
+            fuzz_pow: false,
+            fuzz_network_version: false,
+            abort_before_metadata: false,
+            max_metadata_msg_sleep: 0,
+            always_recv_metadata: true,
+            fuzz_metadata: false,
+            abort_before_ack: false,
+            max_ack_msg_sleep: 0,
+            ack_replies: vec![String::from("Ack")],
+            always_recv_ack: true,
         },
         Some(opt) => opt,
     };
 
     let mut stream = TcpStream::connect(profile.peer.clone()).await?;
-    eprintln!("connected");
-    
+    //eprintln!("connected");
+
     let identity = Identity {
         peer_id: CryptoboxPublicKeyHash::from_base58_check(&profile.id.peer_id).unwrap(),
         public_key: PublicKey::from_hex(&profile.id.public_key).unwrap(),
@@ -386,12 +491,9 @@ async fn fuzz_handshake(profile: &Profile, mut generator: generator::RandomState
     }
 
     rand_sleep(options.max_connect_sleep, &mut generator).await;
- 
+
     let version = match options.fuzz_network_version && generator.gen_t::<bool>() {
-        false => NetworkVersion::new(
-            "TEZOS_MAINNET".to_string(), 
-            0, 
-            1),
+        false => NetworkVersion::new("TEZOS_MAINNET".to_string(), 0, 1),
         true => generator.gen(),
     };
 
@@ -410,11 +512,19 @@ async fn fuzz_handshake(profile: &Profile, mut generator: generator::RandomState
         &public_key,
         &pow,
         generator.gen(),
-        version
-    ).unwrap();
+        version,
+    )
+    .unwrap();
 
-    let initiator_chunk = BinaryChunk::from_content(&connection_message.as_bytes().unwrap()).unwrap();
-    write_bytes(&options.chunk_options, &mut generator, &initiator_chunk.raw(), &mut stream).await?;
+    let initiator_chunk =
+        BinaryChunk::from_content(&connection_message.as_bytes().unwrap()).unwrap();
+    write_bytes(
+        &options.chunk_options,
+        &mut generator,
+        &initiator_chunk.raw(),
+        &mut stream,
+    )
+    .await?;
 
     if options.abort_before_metadata && generator.gen_t::<bool>() {
         return Ok(());
@@ -424,30 +534,36 @@ async fn fuzz_handshake(profile: &Profile, mut generator: generator::RandomState
 
     let mut buffer = ChunkBuffer::default();
     let responder_chunk = buffer.read_chunk(&mut stream).await?;
-    let connection_message = ConnectionMessage::from_bytes(
-        responder_chunk.content()
-    ).unwrap();
+    let connection_message = ConnectionMessage::from_bytes(responder_chunk.content()).unwrap();
 
     let key = PrecomputedKey::precompute(
         &PublicKey::from_bytes(connection_message.public_key()).unwrap(),
-        &identity.secret_key
+        &identity.secret_key,
     );
 
-    let NoncePair { mut local, mut remote } = generate_nonces(
-        &initiator_chunk.raw(),
-        &responder_chunk.raw(),
-        false
-    ).unwrap();
+    let NoncePair {
+        mut local,
+        mut remote,
+    } = generate_nonces(&initiator_chunk.raw(), &responder_chunk.raw(), false).unwrap();
 
     let metadata = match options.fuzz_metadata && generator.gen_t::<bool>() {
         false => MetadataMessage::new(false, false),
         true => generator.gen(),
     };
 
-    write_msg(&options.chunk_options, &mut generator, &metadata, &mut stream, &key, &mut local).await?;
+    write_msg(
+        &options.chunk_options,
+        &mut generator,
+        &metadata,
+        &mut stream,
+        &key,
+        &mut local,
+    )
+    .await?;
 
     if options.always_recv_metadata || generator.gen_t::<bool>() {
-        let m = read_msg::<MetadataMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
+        let m =
+            read_msg::<MetadataMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
         //eprintln!("metadata {:?}", m);
     }
 
@@ -464,7 +580,15 @@ async fn fuzz_handshake(profile: &Profile, mut generator: generator::RandomState
         _ => AckMessage::Nack(generator.gen()),
     };
     //eprintln!("send ack");
-    write_msg(&options.chunk_options, &mut generator, &ack, &mut stream, &key, &mut local).await?;
+    write_msg(
+        &options.chunk_options,
+        &mut generator,
+        &ack,
+        &mut stream,
+        &key,
+        &mut local,
+    )
+    .await?;
     rand_sleep(options.max_ack_msg_sleep, &mut generator).await;
 
     if (options.always_recv_metadata && options.always_recv_ack) || generator.gen_t::<bool>() {
@@ -472,23 +596,39 @@ async fn fuzz_handshake(profile: &Profile, mut generator: generator::RandomState
         read_msg::<AckMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
     }
 
-    match profile.peer_message_fuzzing.borrow() {
-        Some(peer_message_options) => {
-            fuzz_peer_messages(&peer_message_options, &mut generator, &mut stream, &key, &mut local, &mut remote).await
-        },
-        None => Ok(()),
+    if let Some(peer_message_options) = profile.peer_message_fuzzing.borrow() {
+        handle_response(
+            &peer_message_options,
+            &mut generator,
+            &mut stream,
+            &key,
+            &mut local,
+            &mut remote,
+            &mut buffer,
+        )
+        .await?;
+        fuzz_peer_messages(
+            &peer_message_options,
+            &mut generator,
+            &mut stream,
+            &key,
+            &mut local,
+        )
+        .await?;
     }
+
+    Ok(())
 }
 
-
 async fn worker(profile: Arc<Profile>, task_id: u64) {
-    let generator = RandomState::new(profile.prng_seed * task_id, 0);
+    let generator = RandomState::new(profile.prng_seed * task_id, 0, profile.max_chunk_size);
+
     loop {
-        match fuzz_handshake(&profile, generator.clone()).await {
+        match fuzz(&profile, generator.clone()).await {
             Err(e) => {
-                eprintln!("ERROR: {}", e);
+                //eprintln!("ERROR: {}", e);
                 //break
-            },
+            }
             _ => (),
         }
     }
@@ -513,27 +653,25 @@ async fn main() {
 
     let max_fd = fdlimit::raise_fd_limit().unwrap();
     eprintln!("current fd limit {}", max_fd);
-    
+
     match serde_json::from_str::<Profile>(&config) {
         Ok(mut profile) => {
             profile.threads = std::cmp::min(profile.threads, max_fd);
 
             let profile = Arc::new(profile);
             let mut tasks = Vec::new();
-            
+
             for n in 0..profile.threads {
                 let profile = Arc::clone(&profile);
-             
-                tasks.push(
-                    tokio::spawn( async move {
-                        //eprintln!("spawning thread");
-                        worker(profile, n).await
-                    })
-                );
+
+                tasks.push(tokio::spawn(async move {
+                    //eprintln!("spawning thread");
+                    worker(profile, n).await
+                }));
             }
 
             join_all(tasks).await;
-        },
+        }
         Err(e) => eprintln!("error {}", e),
     }
 }

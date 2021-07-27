@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "generator",
-    "handshake_fuzz",
+    "badnode",
     "tla_sm",
     "tezedge_state",
     "ipc",

@@ -49,16 +49,18 @@ type BlocksMap = HashMap<BlockHash, block_header::BlockHeader>;
 pub struct _RandomState {
     rng: SmallRng,
     blocks_limit: usize,
+    max_chunk_size: usize,
     pub blocks: BlocksMap,
     last_block: BlockHash,
     chain_id: ChainId,
 }
 
 impl _RandomState {
-    pub fn new(seed: u64, blocks_limit: usize) -> Self {
+    pub fn new(seed: u64, blocks_limit: usize, max_chunk_size: usize) -> Self {
         _RandomState {
             rng: SmallRng::seed_from_u64(seed),
             blocks_limit: blocks_limit,
+            max_chunk_size: max_chunk_size,
             blocks: BlocksMap::new(),
             last_block: BlockHash::from_base58_check(
                 "BLockGenesisGenesisGenesisGenesisGenesisf79b5d1CoW2"
@@ -72,9 +74,9 @@ impl _RandomState {
 pub struct RandomState(Arc<Mutex<_RandomState>>);
 
 impl RandomState {
-    pub fn new(seed: u64, blocks_limit: usize) -> Self {
+    pub fn new(seed: u64, blocks_limit: usize, max_chunk_size: usize) -> Self {
         RandomState {
-            0: Arc::new(Mutex::new(_RandomState::new(seed, blocks_limit)))
+            0: Arc::new(Mutex::new(_RandomState::new(seed, blocks_limit, max_chunk_size)))
         }
     }
 
@@ -95,7 +97,8 @@ impl RandomState {
         let mut remaining = bytes.len();    
         let mut ret = Vec::new();
         let mut chunk_sizes = Vec::new();
-        let max_size = CONTENT_LENGTH_MAX - MACBYTES;
+        let max_chunk_size = self.0.lock().unwrap().max_chunk_size;
+        let max_size = std::cmp::min(max_chunk_size,CONTENT_LENGTH_MAX - MACBYTES);
     
         loop {
             if remaining <= 1 {
@@ -105,7 +108,10 @@ impl RandomState {
                 break;
             }
     
-            let size = self.gen_range(1..std::cmp::min(remaining, max_size));
+            let size = match max_size {
+                1 => 1,
+                _ => self.gen_range(1..std::cmp::min(remaining, max_size)),
+            };
             chunk_sizes.push(size);
             remaining -= size;
         }
@@ -190,6 +196,12 @@ impl RandomState {
 
     pub fn state(&mut self) -> MutexGuard<_RandomState> {
         self.0.lock().unwrap()
+    }
+
+    pub fn get_block(&mut self, block_hash: &BlockHash) -> block_header::BlockHeaderMessage {
+        let state = self.state();
+        let bh = state.blocks.get(block_hash).unwrap();
+        block_header::BlockHeaderMessage::from(bh.clone())
     }
 
     fn set_last_block_hash(&mut self, hash: BlockHash) {
@@ -460,7 +472,7 @@ impl Generator<protocol::Component> for RandomState {
 impl Generator<protocol::Protocol> for RandomState {
     fn gen(&mut self) -> protocol::Protocol {
         let mut components: Vec<protocol::Component> = Vec::new();
-        let mut remaining = limits::PROTOCOL_MAX_SIZE;
+        let mut remaining = limits::PROTOCOL_COMPONENT_MAX_SIZE;
 
         loop {
             let component: protocol::Component = self.gen();
