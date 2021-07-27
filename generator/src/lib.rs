@@ -1,19 +1,22 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
 use std::str::FromStr;
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
-use rand::distributions::{
-    Standard,
-    Distribution,
-    uniform::{SampleRange, SampleUniform},
+use rand::{
+    rngs::SmallRng,
+    seq::SliceRandom,
+    Rng,
+    SeedableRng,
+    distributions::{
+        Standard,
+        Distribution,
+        uniform::{SampleRange, SampleUniform},
+    }
 };
 use std::net;
-
 use std::convert::TryInto;
 use hex::FromHex;
 
-use tezos_messages::p2p::binary_message::{BinaryWrite, MessageHash};
+use tezos_messages::p2p::binary_message::{BinaryChunk, BinaryWrite, CONTENT_LENGTH_MAX, MessageHash};
 use tezos_messages::p2p::encoding::{
     advertise,
     block_header,
@@ -34,7 +37,7 @@ use tezos_messages::p2p::encoding::{
 }; 
 
 use crypto::{
-    crypto_box::{CryptoKey, PublicKey, SecretKey, CRYPTO_KEY_SIZE},
+    crypto_box::{CryptoKey, PublicKey, SecretKey, PrecomputedKey, CRYPTO_KEY_SIZE},
     hash::*,
     proof_of_work::{ProofOfWork, POW_SIZE},
     nonce::{Nonce, NONCE_SIZE}
@@ -81,6 +84,73 @@ impl RandomState {
         R: SampleRange<T> {
         self.0.lock().unwrap().rng.gen_range::<T, R>(range)
     }
+
+    pub fn shuffle<T>(&mut self, vec: &mut Vec<T>) {
+        vec.shuffle(&mut self.0.lock().unwrap().rng);
+    }
+
+    pub fn gen_chunks(&mut self, bytes: Vec<u8>, key: &PrecomputedKey, nonce: &mut Nonce) -> Vec<BinaryChunk> {
+        const MACBYTES: usize = 16;
+        let mut start = 0;
+        let mut remaining = bytes.len();    
+        let mut ret = Vec::new();
+        let mut chunk_sizes = Vec::new();
+        let max_size = CONTENT_LENGTH_MAX - MACBYTES;
+    
+        loop {
+            if remaining <= 1 {
+                if remaining == 1 {
+                    chunk_sizes.push(1);
+                }
+                break;
+            }
+    
+            let size = self.gen_range(1..std::cmp::min(remaining, max_size));
+            chunk_sizes.push(size);
+            remaining -= size;
+        }
+    
+        self.shuffle::<usize>(&mut chunk_sizes);
+    
+        for chunk_size in chunk_sizes {
+            let bytes = key.encrypt(&bytes[start..start + chunk_size], &nonce).unwrap();
+            *nonce = nonce.increment();
+            ret.push(BinaryChunk::from_content(&bytes).unwrap());
+            start += chunk_size;
+        }
+
+        ret    
+    }
+
+    pub fn gen_byte_chunks(&mut self, bytes: Vec<u8>) -> Vec<Vec<u8>> {
+        let mut start = 0;
+        let mut remaining = bytes.len();    
+        let mut ret = Vec::new();
+        let mut chunk_sizes = Vec::new();
+    
+        loop {
+            if remaining <= 1 {
+                if remaining == 1 {
+                    chunk_sizes.push(1);
+                }
+                break;
+            }
+    
+            let size = self.gen_range(1..remaining);
+            chunk_sizes.push(size);
+            remaining -= size;
+        }
+    
+        self.shuffle::<usize>(&mut chunk_sizes);
+    
+        for chunk_size in chunk_sizes {
+            ret.push(Vec::from(&bytes[start..start + chunk_size]));
+            start += chunk_size;
+        }
+
+        ret    
+    }
+
 
     pub fn gen_t<T>(&mut self) -> T where Standard: Distribution<T> {
         self.0.lock().unwrap().rng.gen::<T>()
@@ -390,7 +460,7 @@ impl Generator<protocol::Component> for RandomState {
 impl Generator<protocol::Protocol> for RandomState {
     fn gen(&mut self) -> protocol::Protocol {
         let mut components: Vec<protocol::Component> = Vec::new();
-        let mut remaining = limits::PROTOCOL_COMPONENT_MAX_SIZE;
+        let mut remaining = limits::PROTOCOL_MAX_SIZE;
 
         loop {
             let component: protocol::Component = self.gen();
