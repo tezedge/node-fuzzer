@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "generator",
+    "identity_tool",
     "badnode",
     "tla_sm",
     "tezedge_state",

@@ -38,8 +38,8 @@ use tezos_messages::p2p::{
 struct Credentials {
     peer_id: String,
     public_key: String,
-    private_key: String,
-    pow: String,
+    secret_key: String,
+    proof_of_work_stamp: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -95,7 +95,6 @@ struct PeerMessageOptions {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Profile {
-    id: Credentials,
     peer: String,
     prng_seed: u64,
     max_chunk_size: usize,
@@ -104,15 +103,18 @@ struct Profile {
     peer_message_fuzzing: Option<PeerMessageOptions>,
 }
 
+static DEFAULT_IDENTITY: &'static str = r#"
+[{
+    "peer_id":"idt3LoYeur2FXAvRXsvmW2Ac9EpEHb",
+    "public_key":"f0c7f2fdf2e6effb32fb6d750051dc63512b5bd8d16ac7aa110f4f4fc840552e",
+    "proof_of_work_stamp":"d5a8e2140d85615201c0e08b1bd22780b8d766af9be06123",
+    "secret_key":"051a6c62253e37577de1031fee4e584487494d6da8186dba608a894ba2834a40"
+}]
+"#;
+
 static DEFAULT_PROFILE: &'static str = r#"
 {
-    "id": {
-        "peer_id": "idrdoT9g6YwELhUQyshCcHwAzBS9zA",
-        "public_key": "94498d9416140fbc458495333daac1b4c87e419f5726717a54f9b6c67476ae1c",
-        "private_key": "ac7acf3afed7637be10f8fc76a2eb6b3359c78adb1d813b41cbab3fae954f4b1",
-        "pow": "bbc2300149249e1ccc84a54362236c3cbbc2cc2ffbd3b6ea"
-    },
-    "peer": "127.0.0.1:9732",
+    "peer": "172.28.5.0:9732",
     "prng_seed": 1234567890,
     "max_chunk_size": 65519,
     "threads": 1,
@@ -449,8 +451,12 @@ async fn handle_response(
     Ok(())
 }
 
-async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Result<()> {
-    let options = match profile.handshake_fuzzing.clone() {
+async fn fuzz(
+    identities: &Vec<Identity>,
+    profile: &Profile,
+    generator: &mut generator::RandomState
+) -> Result<()> {
+    let options = match profile.handshake_fuzzing.borrow() {
         None => HandshakeOptions {
             chunk_options: ChunkOptions {
                 split_chunks: false,
@@ -473,24 +479,19 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
             ack_replies: vec![String::from("Ack")],
             always_recv_ack: true,
         },
-        Some(opt) => opt,
+        Some(opt) => opt.clone(),
     };
 
     let mut stream = TcpStream::connect(profile.peer.clone()).await?;
     //eprintln!("connected");
 
-    let identity = Identity {
-        peer_id: CryptoboxPublicKeyHash::from_base58_check(&profile.id.peer_id).unwrap(),
-        public_key: PublicKey::from_hex(&profile.id.public_key).unwrap(),
-        secret_key: SecretKey::from_hex(&profile.id.private_key).unwrap(),
-        proof_of_work_stamp: ProofOfWork::from_hex(&profile.id.pow).unwrap(),
-    };
+    let identity = identities.get(generator.gen_range(0..identities.len())).unwrap();
 
     if options.abort_before_connect && generator.gen_t::<bool>() {
         return Ok(());
     }
 
-    rand_sleep(options.max_connect_sleep, &mut generator).await;
+    rand_sleep(options.max_connect_sleep, generator).await;
 
     let version = match options.fuzz_network_version && generator.gen_t::<bool>() {
         false => NetworkVersion::new("TEZOS_MAINNET".to_string(), 0, 1),
@@ -498,12 +499,12 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
     };
 
     let public_key = match options.fuzz_public_key && generator.gen_t::<bool>() {
-        false => identity.public_key,
+        false => identity.public_key.clone(),
         true => generator.gen(),
     };
 
     let pow = match options.fuzz_pow && generator.gen_t::<bool>() {
-        false => identity.proof_of_work_stamp,
+        false => identity.proof_of_work_stamp.clone(),
         true => generator.gen(),
     };
 
@@ -520,7 +521,7 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
         BinaryChunk::from_content(&connection_message.as_bytes().unwrap()).unwrap();
     write_bytes(
         &options.chunk_options,
-        &mut generator,
+        generator,
         &initiator_chunk.raw(),
         &mut stream,
     )
@@ -530,7 +531,7 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
         return Ok(());
     }
 
-    rand_sleep(options.max_connect_msg_sleep, &mut generator).await;
+    rand_sleep(options.max_connect_msg_sleep, generator).await;
 
     let mut buffer = ChunkBuffer::default();
     let responder_chunk = buffer.read_chunk(&mut stream).await?;
@@ -553,7 +554,7 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
 
     write_msg(
         &options.chunk_options,
-        &mut generator,
+        generator,
         &metadata,
         &mut stream,
         &key,
@@ -571,7 +572,7 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
         return Ok(());
     }
 
-    rand_sleep(options.max_metadata_msg_sleep, &mut generator).await;
+    rand_sleep(options.max_metadata_msg_sleep, generator).await;
 
     let index = generator.gen_range(0..options.ack_replies.len());
     let ack: AckMessage = match &options.ack_replies.get(index).unwrap()[..] {
@@ -582,14 +583,14 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
     //eprintln!("send ack");
     write_msg(
         &options.chunk_options,
-        &mut generator,
+        generator,
         &ack,
         &mut stream,
         &key,
         &mut local,
     )
     .await?;
-    rand_sleep(options.max_ack_msg_sleep, &mut generator).await;
+    rand_sleep(options.max_ack_msg_sleep, generator).await;
 
     if (options.always_recv_metadata && options.always_recv_ack) || generator.gen_t::<bool>() {
         //eprintln!("recv ack");
@@ -599,7 +600,7 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
     if let Some(peer_message_options) = profile.peer_message_fuzzing.borrow() {
         handle_response(
             &peer_message_options,
-            &mut generator,
+            generator,
             &mut stream,
             &key,
             &mut local,
@@ -609,7 +610,7 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
         .await?;
         fuzz_peer_messages(
             &peer_message_options,
-            &mut generator,
+            generator,
             &mut stream,
             &key,
             &mut local,
@@ -620,13 +621,17 @@ async fn fuzz(profile: &Profile, mut generator: generator::RandomState) -> Resul
     Ok(())
 }
 
-async fn worker(profile: Arc<Profile>, task_id: u64) {
-    let generator = RandomState::new(profile.prng_seed * task_id, 0, profile.max_chunk_size);
+async fn worker(identities: Arc<Vec<Identity>>, profile: Arc<Profile>, task_id: u64) {
+    let mut generator = RandomState::new(
+        profile.prng_seed * task_id, 
+        0, 
+        profile.max_chunk_size
+    );
 
     loop {
-        match fuzz(&profile, generator.clone()).await {
+        match fuzz(&identities, &profile, &mut generator).await {
             Err(e) => {
-                //eprintln!("ERROR: {}", e);
+                eprintln!("ERROR: {}", e);
                 //break
             }
             _ => (),
@@ -636,13 +641,20 @@ async fn worker(profile: Arc<Profile>, task_id: u64) {
 
 #[tokio::main]
 async fn main() {
-    let matches = App::new("handshake-fuzzer")
+    let matches = App::new("badnode")
         .arg(
             Arg::with_name("config")
                 .short("c")
                 .long("config")
                 .takes_value(true)
                 .help("path to JSON configuration file"),
+        )
+        .arg(
+            Arg::with_name("identities")
+                .short("i")
+                .long("identities")
+                .takes_value(true)
+                .help("path to JSON identities file"),
         )
         .get_matches();
 
@@ -651,27 +663,38 @@ async fn main() {
         None => DEFAULT_PROFILE.to_string(),
     };
 
+    let identities = serde_json::from_str::<Vec<Credentials>>(&
+        match matches.value_of("identities") {
+            Some(file) => std::fs::read_to_string(file).unwrap(),
+            None => DEFAULT_IDENTITY.to_string(),
+    }).unwrap().iter().map(|x| {
+        Identity {
+            peer_id: CryptoboxPublicKeyHash::from_base58_check(&x.peer_id).unwrap(),
+            public_key: PublicKey::from_hex(&x.public_key).unwrap(),
+            secret_key: SecretKey::from_hex(&x.secret_key).unwrap(),
+            proof_of_work_stamp: ProofOfWork::from_hex(&x.proof_of_work_stamp).unwrap(),
+        }
+    }).collect::<Vec<Identity>>();
+
     let max_fd = fdlimit::raise_fd_limit().unwrap();
     eprintln!("current fd limit {}", max_fd);
 
-    match serde_json::from_str::<Profile>(&config) {
-        Ok(mut profile) => {
-            profile.threads = std::cmp::min(profile.threads, max_fd);
+    let mut profile = serde_json::from_str::<Profile>(&config).unwrap();
+    profile.threads = std::cmp::min(profile.threads, max_fd);
 
-            let profile = Arc::new(profile);
-            let mut tasks = Vec::new();
+    let mut tasks = Vec::new();
+    let identities = Arc::new(identities);
+    let profile = Arc::new(profile);
 
-            for n in 0..profile.threads {
-                let profile = Arc::clone(&profile);
-
-                tasks.push(tokio::spawn(async move {
-                    //eprintln!("spawning thread");
-                    worker(profile, n).await
-                }));
-            }
-
-            join_all(tasks).await;
-        }
-        Err(e) => eprintln!("error {}", e),
+    for n in 0..profile.threads {
+        let identities = Arc::clone(&identities);   
+        let profile = Arc::clone(&profile);
+        tasks.push(
+            tokio::spawn(async move {
+                worker(identities, profile, n).await
+            })
+        );
     }
+
+    join_all(tasks).await;
 }
