@@ -4,15 +4,17 @@ use hex::FromHex;
 use serde::{Deserialize, Serialize};
 use tezos_messages::p2p::binary_message;
 use tezos_messages::p2p::encoding::{block_header, current_branch, operations_for_blocks};
+use tokio::net::unix::SocketAddr;
 use tokio::runtime::Handle;
 
 use futures::future::join_all;
 use std::borrow::Borrow;
 use std::convert::{TryFrom, TryInto};
 use std::io::{Error, ErrorKind, Read, Result};
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::{sleep, Duration};
 
 use crypto::{
@@ -114,7 +116,7 @@ static DEFAULT_IDENTITY: &'static str = r#"
 
 static DEFAULT_PROFILE: &'static str = r#"
 {
-    "peer": "172.28.5.0:9732",
+    "peer": "172.28.0.0:9732",
     "prng_seed": 1234567890,
     "max_chunk_size": 65519,
     "threads": 1,
@@ -176,17 +178,6 @@ impl ChunkBuffer {
         const HEADER_LENGTH: usize = 2;
         let mut retry = 0;
         loop {
-            self.len += stream.read(&mut self.data[self.len..]).await?;
-
-            if self.len == 0 {
-                if retry > 2 {
-                    return Err(Error::new(ErrorKind::UnexpectedEof, "zero length read"));
-                }
-
-                retry += 1;
-                sleep(Duration::from_millis(200)).await;
-            }
-
             if self.len >= HEADER_LENGTH {
                 let chunk_len = u16::from_be_bytes([self.data[0], self.data[1]]) as usize;
                 let raw_len = chunk_len + HEADER_LENGTH;
@@ -200,6 +191,17 @@ impl ChunkBuffer {
 
                     return Ok(chunk.try_into().unwrap());
                 }
+            }
+
+            self.len += stream.read(&mut self.data[self.len..]).await?;
+
+            if self.len == 0 {
+                if retry > 2 {
+                    return Err(Error::new(ErrorKind::UnexpectedEof, "zero length read"));
+                }
+
+                retry += 1;
+                sleep(Duration::from_millis(200)).await;
             }
         }
     }
@@ -482,8 +484,26 @@ async fn fuzz(
         Some(opt) => opt.clone(),
     };
 
-    let mut stream = TcpStream::connect(profile.peer.clone()).await?;
+    
     //eprintln!("connected");
+
+    let socket = TcpSocket::new_v4()?;
+    socket.set_reuseaddr(true)?;
+    socket.set_reuseport(true)?;
+
+    let addr = SocketAddrV4::new(
+            // Target should be 172.28.50.0
+            Ipv4Addr::new(
+                172, 
+                28, 
+                generator.gen_range(0..255), 
+                generator.gen_range(2..255)),
+            generator.gen_range(2000 as u16..0xffff)
+        );
+    
+
+    socket.bind(addr.try_into().unwrap())?;
+    let mut stream = socket.connect(profile.peer.clone().parse().unwrap()).await?;
 
     let identity = identities.get(generator.gen_range(0..identities.len())).unwrap();
 

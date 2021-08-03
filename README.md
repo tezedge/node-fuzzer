@@ -5,35 +5,42 @@ cargo build --release --bin badnode
 ```
 
 # How to use
-It is recommended to run both the target, and the fuzzer inside docker containers in an isolated network.
+It is recommended to run the target inside a docker container in an isolated network. Sometimes we need internet access to the container, so the easiest way is using the default docker bridge, and assign an static IP to the container. Then we can filter external traffic with `iptables`, and if we need internet access we can temporarily remove the iptables rule.
 
-1. Create an internal network for the containers:
+Fuzzing will be carried on over the loopback device to take advantage of Any-IP (https://blog.widodh.nl/2016/04/anyip-bind-a-whole-subnet-to-your-linux-machine/). For this reason we will use Docker's port redirection to conduct fuzzing.
+
+1. Assign a subnet to the loopback device:
 ```
-docker network create --d bridge --subnet=172.28.0.0/16 --ip-range=172.28.5.0/24 --gateway=172.28.5.254 --internal fuzznet
+ip -4 route add local 172.28.0.0/16 dev lo
+```
+2. Add iptables rule to disallow external traffic to the container:
+```
+iptables -I DOCKER-USER -s 172.17.0.2 -j DROP
 ```
 
-2. Run the target node in a container attached to that network. For example if the target is Octez:
+3. When running the Docker container for the fuzzing target always assign the static ip `172.17.0.2` and redirect the default P2P port `9732`. For example if our target is Octez the docker command is:
 ```
-docker run -m="8g" --network fuzznet -ti 4a30177671d1 tezos-node --no-bootstrap-peers
+docker run -m="8g" --ip 172.17.0.2 -p 9732:9732 -ti octez_image tezos-node --no-bootstrap-peers
 ```
-In this case we also limited the node memory with the `-m="8g"` option.
+
+In this example we also limit the container's memory passing the `-m="8g"` option.
 
 3. If the target is TezEdge pass the following options to `light-node`:
 ```
---network=mainnet --disable-bootstrap-lookup --synchronization-thresh 0 --peer-thresh-low=0
+LD_LIBRARY_PATH=tezos/sys/lib_tezos/artifacts/ ./target/release/light-node --network=mainnet --disable-bootstrap-lookup --synchronization-thresh 0 --peer-thresh-low=0 --config-file light_node/etc/tezedge/tezedge.config --protocol-runner ./target/release/protocol-runner
 ```
+We should use this verbose command and avoid using `cargo` or `run.sh` since we disabled external network access to the container.
 
 4. Many of the fuzzer options (especially handshake fuzzing) might cause the node to quickly blacklist the fuzzer. This can be avoided by passing `--disable-peer-blacklist` to the node.
 **TODO**: figure out if there is a way to do this in Octez. 
 
-
-5. Once the target node is listening for connections run the fuzzer (from inside a container attached to the same network):
+5. Once the target node is up and listening, run the fuzzer in the host (or in a container with `--network=host`):
 ```
 ./target/release/badnode -c "configuration file" -i "identities file"
 ```
 If no `-c` or `-i` flags are specified the fuzzer uses a default configuration.
 
-**NOTE**: the configuration file must include the correct IP address (docker internal network) of the container running the node.
+**NOTE**: the configuration file must have a valid IP address for the target. Remember that any IP address in the `172.28.0.0/16` range is bind to the loopback device, the fuzzer randomly takes ip address from `172.28.0.2` to `172.28.255.255`, so a good IP to give to the target is `172.28.0.0`.
 
 # Identities
 The identities file can be generated with `identity_tool`.
@@ -60,7 +67,7 @@ If no configuration file is provided the fuzzer uses the following default confi
 
 ```
 {
-    "peer": "172.28.5.0:9732",
+    "peer": "172.28.0.0:9732",
     "prng_seed": 1234567890,
     "max_chunk_size": 65519,
     "threads": 1,
