@@ -4,12 +4,6 @@ use futures::future::join_all;
 use tezos_identity::Identity;
 use crypto::proof_of_work::ProofOfWork;
 
-async fn worker(num: u64) {
-    for _ in 0..num {
-        let id = Identity::generate(26.0).unwrap();
-        println!("{}, ", id.as_json().unwrap());
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -36,20 +30,20 @@ async fn main() {
     for _ in 0..16 {
         tasks.push(tokio::spawn(async move {
             for _ in 0..num/16 {
-                let id = Identity::generate(ProofOfWork::DEFAULT_TARGET).unwrap();
+                let id = Identity::generate(26.0).unwrap();
                 println!("{}, ", id.as_json().unwrap());
             }
         }));
     }
 
     for _ in 0..num % 16 {
-        let id = Identity::generate(ProofOfWork::DEFAULT_TARGET).unwrap();
+        let id = Identity::generate(26.0).unwrap();
         println!("{}, ", id.as_json().unwrap());
     }
 
     join_all(tasks).await;
 
-    let id = Identity::generate(ProofOfWork::DEFAULT_TARGET).unwrap();
+    let id = Identity::generate(26.0).unwrap();
     println!("{}", id.as_json().unwrap());
     println!("]");
 }
