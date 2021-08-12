@@ -46,6 +46,7 @@ struct Credentials {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ChunkOptions {
+    flip_bits: bool,            // randomly flip bits in raw stream
     split_chunks: bool,         // split a message into multiple chunks
     split_bytes: bool,          // split sending of chunk bytes into multiple slices
     incomplete_send: bool,      // randomly abort in the middle of sending bytes slices
@@ -123,6 +124,7 @@ static DEFAULT_PROFILE: &'static str = r#"
     "handshake_fuzzing": null,
     "peer_message_fuzzing": {
         "chunk_options": {
+            "flip_bits": false,
             "split_chunks": true,
             "split_bytes": false,
             "incomplete_send": false,
@@ -130,6 +132,8 @@ static DEFAULT_PROFILE: &'static str = r#"
         },
         "messages_per_chunk": 1,
         "push_messages": [
+            "Disconnect",
+            "Bootstrap",
             "Advertise",
             "SwapRequest",
             "SwapAck",
@@ -246,6 +250,25 @@ async fn write_bytes_encrypted(
     nonce: &mut Nonce,
 ) -> Result<()> {
     const MACBYTES: usize = 16;
+    let bytes = if options.flip_bits {
+        let mut remaining_flips = generator.gen_range(0 .. bytes.len()) >> 3;
+        let mut mutated = Vec::new();
+        
+        for b in bytes {
+            if remaining_flips > 0 && generator.gen_t::<bool>() {
+                remaining_flips -= 1;
+                mutated.push(*b ^ (1 << generator.gen_range(0 .. 8)));
+            }
+            else {
+                mutated.push(*b);
+            }
+        }
+        mutated
+    }
+    else {
+        bytes.clone()
+    };
+
     let chunks = match options.split_chunks && generator.gen_t::<bool>() {
         true => generator.gen_chunks(bytes.clone(), key, nonce),
         false => bytes
@@ -344,6 +367,8 @@ async fn fuzz_peer_messages(
         for _ in 0..options.messages_per_chunk {
             let index = generator.gen_range(0..messages.len());
             let msg = match &messages.get(index).unwrap()[..] {
+                "Disconnect" => PeerMessage::Disconnect,
+                "Bootstrap" => PeerMessage::Bootstrap,
                 "Advertise" => PeerMessage::Advertise(generator.gen()),
                 "SwapRequest" => PeerMessage::SwapRequest(generator.gen()),
                 "SwapAck" => PeerMessage::SwapAck(generator.gen()),
@@ -362,6 +387,10 @@ async fn fuzz_peer_messages(
                 "OperationsForBlocks" => PeerMessage::OperationsForBlocks(generator.gen()),
                 _ => panic!("Invalid message"),
             };
+
+            if let PeerMessage::BlockHeader(bh) = msg.clone() {
+                eprintln!("msg {:?}",  bh.block_header().timestamp());
+            }
             //eprintln!("msg {:?}",  msg.get_type());
             msg_batch.append(&mut PeerMessageResponse::from(msg).as_bytes().unwrap());
         }
@@ -461,6 +490,7 @@ async fn fuzz(
     let options = match profile.handshake_fuzzing.borrow() {
         None => HandshakeOptions {
             chunk_options: ChunkOptions {
+                flip_bits: false,
                 split_chunks: false,
                 split_bytes: false,
                 incomplete_send: false,
@@ -583,9 +613,9 @@ async fn fuzz(
     .await?;
 
     if options.always_recv_metadata || generator.gen_t::<bool>() {
-        let m =
+        let _m =
             read_msg::<MetadataMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
-        //eprintln!("metadata {:?}", m);
+        //eprintln!("metadata {:?}", _m);
     }
 
     if options.abort_before_ack && generator.gen_t::<bool>() {
@@ -652,6 +682,11 @@ async fn worker(identities: Arc<Vec<Identity>>, profile: Arc<Profile>, task_id: 
         match fuzz(&identities, &profile, &mut generator).await {
             Err(e) => {
                 eprintln!("ERROR: {}", e);
+
+                if Some(111) == e.raw_os_error() {
+                    return;
+                } 
+                
                 //break
             }
             _ => (),
