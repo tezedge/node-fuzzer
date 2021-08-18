@@ -3,6 +3,7 @@ members = [
     "generator",
     "identity_tool",
     "badnode",
+    "rpc_fuzzer",
     "tla_sm",
     "tezedge_state",
     "ipc",
