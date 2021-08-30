@@ -12,6 +12,12 @@ use rand::{
         uniform::{SampleRange, SampleUniform},
     }
 };
+use tezos_messages::p2p::encoding::block_header::BlockHeaderMessage;
+use tezos_messages::p2p::encoding::operation::OperationMessage;
+use tezos_messages::p2p::encoding::operations_for_blocks::OperationsForBlocksMessage;
+use tezos_messages::p2p::encoding::prelude::CurrentBranchMessage;
+use tezos_messages::p2p::encoding::protocol::ProtocolMessage;
+use tezos_messages::p2p::encoding::current_head::CurrentHeadMessage;
 use std::net;
 use std::convert::TryInto;
 use hex::FromHex;
@@ -50,9 +56,16 @@ pub struct _RandomState {
     rng: SmallRng,
     blocks_limit: usize,
     max_chunk_size: usize,
+    fitness_count: u64,
     pub blocks: BlocksMap,
     last_block: BlockHash,
     chain_id: ChainId,
+    current_branch: Option<CurrentBranchMessage>,
+    current_head: Option<CurrentHeadMessage>,
+    block_header: Option<BlockHeaderMessage>,
+    operation: Option<OperationMessage>,
+    protocol: Option<ProtocolMessage>,
+    operations_for_blocks: Option<OperationsForBlocksMessage>
 }
 
 impl _RandomState {
@@ -61,11 +74,18 @@ impl _RandomState {
             rng: SmallRng::seed_from_u64(seed),
             blocks_limit: blocks_limit,
             max_chunk_size: max_chunk_size,
+            fitness_count: 0,
             blocks: BlocksMap::new(),
             last_block: BlockHash::from_base58_check(
                 "BLockGenesisGenesisGenesisGenesisGenesisf79b5d1CoW2"
             ).unwrap(),
-            chain_id: ChainId::from_str("NetXdQprcVkpaWU").unwrap(),          
+            chain_id: ChainId::from_str("NetXdQprcVkpaWU").unwrap(),
+            current_branch: None,
+            current_head: None,
+            block_header: None,
+            operation: None,
+            protocol: None,
+            operations_for_blocks: None
         }
     }
 }
@@ -78,6 +98,11 @@ impl RandomState {
         RandomState {
             0: Arc::new(Mutex::new(_RandomState::new(seed, blocks_limit, max_chunk_size)))
         }
+    }
+
+    pub fn gen_fitness(&mut self) -> u64 {
+        self.0.lock().unwrap().fitness_count += 1;
+        self.0.lock().unwrap().fitness_count
     }
 
     pub fn gen_range<T, R>(&mut self, range: R) -> T 
@@ -157,6 +182,9 @@ impl RandomState {
         ret    
     }
 
+    pub fn gen_bool(&mut self, p: f64) -> bool {
+        self.0.lock().unwrap().rng.gen_bool(p)
+    }
 
     pub fn gen_t<T>(&mut self) -> T where Standard: Distribution<T> {
         self.0.lock().unwrap().rng.gen::<T>()
@@ -189,6 +217,62 @@ impl RandomState {
         self.0.lock().unwrap().chain_id = chain_id
     }
 
+    pub fn get_current_branch(&mut self) -> Option<CurrentBranchMessage> {
+        self.0.lock().unwrap().current_branch.clone()
+    }
+
+    pub fn set_current_branch(&mut self, current_branch: CurrentBranchMessage) {
+        let fitness = current_branch.current_branch().current_head().fitness();
+        if fitness.len() > 1 {
+            self.0.lock().unwrap().fitness_count = u64::from_be_bytes(fitness[1].clone().try_into().unwrap());
+            self.0.lock().unwrap().current_branch = Some(current_branch);    
+        }
+    }
+
+    pub fn get_current_head(&mut self) -> Option<CurrentHeadMessage> {
+        self.0.lock().unwrap().current_head.clone()
+    }
+
+    pub fn set_current_head(&mut self, current_head: CurrentHeadMessage) {
+        let fitness = current_head.current_block_header().fitness();
+        if fitness.len() > 1 {
+            self.0.lock().unwrap().fitness_count = u64::from_be_bytes(fitness[1].clone().try_into().unwrap());
+            self.0.lock().unwrap().current_head = Some(current_head);
+        }
+    }
+
+    pub fn get_block_header(&mut self) -> Option<BlockHeaderMessage> {
+        self.0.lock().unwrap().block_header.clone()
+    }
+
+    pub fn set_block_header(&mut self, block_header: BlockHeaderMessage) {
+        self.0.lock().unwrap().block_header = Some(block_header)
+    }
+
+    pub fn get_operation(&mut self) -> Option<OperationMessage> {
+        self.0.lock().unwrap().operation.clone()
+    }
+
+    pub fn set_operation(&mut self, operation: OperationMessage) {
+        self.0.lock().unwrap().operation = Some(operation)
+    }
+
+    pub fn get_protocol(&mut self) -> Option<ProtocolMessage> {
+        self.0.lock().unwrap().protocol.clone()
+    }
+
+    pub fn set_protocol(&mut self, protocol: ProtocolMessage) {
+        self.0.lock().unwrap().protocol = Some(protocol)
+    }
+
+    pub fn get_operations_for_blocks(&mut self) -> Option<OperationsForBlocksMessage> {
+        self.0.lock().unwrap().operations_for_blocks.clone()
+    }
+
+    pub fn set_operations_for_blocks(&mut self, operations_for_blocks: OperationsForBlocksMessage) {
+        self.0.lock().unwrap().operations_for_blocks = Some(operations_for_blocks)
+    }
+
     fn block_hash(bh: &block_header::BlockHeader) -> BlockHash {
         let hash = bh.message_hash().unwrap();
         BlockHash::try_from_bytes(&hash[..]).unwrap()
@@ -198,10 +282,16 @@ impl RandomState {
         self.0.lock().unwrap()
     }
 
-    pub fn get_block(&mut self, block_hash: &BlockHash) -> block_header::BlockHeaderMessage {
+    pub fn get_block(&mut self, block_hash: &BlockHash) -> Option<block_header::BlockHeaderMessage> {
         let state = self.state();
-        let bh = state.blocks.get(block_hash).unwrap();
-        block_header::BlockHeaderMessage::from(bh.clone())
+        let bh = state.blocks.get(block_hash);
+
+        if bh.is_some() {
+            Some(block_header::BlockHeaderMessage::from(bh.unwrap().clone()))
+        }
+        else {
+            None
+        }        
     }
 
     fn set_last_block_hash(&mut self, hash: BlockHash) {
@@ -211,6 +301,9 @@ impl RandomState {
 
 pub trait Generator<T> {
     fn gen(&mut self) -> T;
+}
+pub trait Mutator<T> {
+    fn mutate(&mut self, data: T) -> T;
 } 
 
 impl Generator<net::IpAddr> for RandomState {
@@ -235,6 +328,13 @@ impl<T> Generator<HashKind<T>> for RandomState where T: HashTrait {
      }
 }
 
+impl<T> Mutator<HashKind<T>> for RandomState where T: HashTrait {
+    fn mutate(&mut self, data: HashKind<T>) -> HashKind<T> {
+        // No point in mutating hashes
+        data
+    }
+}
+
 impl Generator<advertise::AdvertiseMessage> for RandomState {
     fn gen(&mut self) -> advertise::AdvertiseMessage {
         let size = self.gen_range(0..limits::ADVERTISE_ID_LIST_MAX_LENGTH);
@@ -255,7 +355,12 @@ impl Generator<swap::SwapMessage> for RandomState {
 
 impl Generator<current_branch::GetCurrentBranchMessage> for RandomState {
     fn gen(&mut self) -> current_branch::GetCurrentBranchMessage {
-        let chain_id: HashKind<ChainId> = self.gen();
+        let chain_id: HashKind<ChainId> = if self.gen_bool(0.5) {
+            self.gen()
+        }
+        else {
+            HashKind{ 0: self.get_chain_id() }
+        };
         current_branch::GetCurrentBranchMessage::new(chain_id.0)
     }
 }
@@ -265,19 +370,25 @@ impl Generator<block_header::BlockHeaderBuilder> for RandomState {
         let max_size = limits::BLOCK_HEADER_MAX_SIZE;
         let mut remaining: usize = max_size - 0x1000;
         let mut fitness: Vec<Vec<u8>> = Vec::new();
-        
+        let mut remaining_fitness_size = 28;
+        /*
+        fitness.push(vec![0 as u8, '1' as u8]);
+        fitness.push(self.gen_fitness().to_be_bytes().to_vec());
+        remaining -= 2 + 8;
+        */
         loop {
-            let element_size = self.gen_range(0..max_size);
+            let element_size = self.gen_range(1..28);
             let element = self.gen_vec::<u8>(element_size);
 
-            if element_size > remaining {
+            if element_size + 4 > remaining_fitness_size {
                 break;
             }
 
             fitness.push(element);
-            remaining -= element_size;
+            remaining_fitness_size -= element_size + 4;
+            remaining -= element_size + 4;
         }
-
+        
         let data_len = self.gen_range(1..remaining);
         let predecessor: HashKind<BlockHash> = self.gen();
         let operations_hash: HashKind<OperationListListHash> = self.gen();
@@ -303,11 +414,97 @@ impl Generator<block_header::BlockHeader> for RandomState {
     }
 }
 
+impl Mutator<block_header::BlockHeader> for RandomState {
+    fn mutate(&mut self, data: block_header::BlockHeader) -> block_header::BlockHeader {
+        let max_size = limits::BLOCK_HEADER_MAX_SIZE;
+        let mut remaining: usize = max_size - 0x1000;
+
+        let level = if self.gen_bool(0.9) { data.level() + 1 } else { self.gen_t::<i32>() };
+        let proto = if self.gen_bool(0.9) { data.proto() } else { self.gen_t::<u8>() };
+        let predecessor = match self.get_current_head() {
+                Some(head) => Self::block_hash(&head.current_block_header()),
+                _ => {
+                    let mut blockb: block_header::BlockHeaderBuilder = self.gen();
+                    let predecessor = self.state().last_block.clone();
+                    let new_block = blockb.predecessor(predecessor).build().unwrap();
+                    Self::block_hash(&new_block)
+                }
+            };
+        let timestamp = if self.gen_bool(0.9) {
+            data.timestamp() + self.gen_range(0..60*60)
+        }
+        else {
+            self.gen_t::<i64>()
+        };
+        let validation_pass = if self.gen_bool(0.9) { data.validation_pass() + 1 } else { self.gen_t::<u8>() };
+        // TODO: generate from operations
+        let operations_hash: HashKind<OperationListListHash> = self.gen();
+        let mut fitness: Vec<Vec<u8>> = Vec::new();
+        let mut remaining_fitness_size = 28;
+        
+        if self.gen_bool(0.9) {
+            fitness.push(data.fitness()[0].clone());
+            remaining -= fitness[0].len();
+            fitness.push(self.gen_fitness().to_be_bytes().to_vec());
+            remaining -= fitness[1].len();
+        }
+        else {
+            loop {
+                let element_size = self.gen_range(1..28);
+                let element = self.gen_vec::<u8>(element_size);
+    
+                if element_size + 4 > remaining_fitness_size {
+                    break;
+                }
+    
+                fitness.push(element);
+                remaining_fitness_size -= element_size + 4;
+                remaining -= element_size + 4;
+            }
+        }
+        // TODO: generate from new context
+        let context: HashKind<ContextHash> = self.gen();
+        let bytes = data.protocol_data();
+        let bytes_len = bytes.len();
+        
+        let protocol_data = if self.gen_bool(0.9) && bytes_len > 0 {
+            let mut remaining_flips = self.gen_range(0 .. bytes_len) >> 3;
+            let mut mutated = Vec::new();
+            
+            for b in bytes {
+                if remaining_flips > 0 && self.gen_bool(0.1) {
+                    remaining_flips -= 1;
+                    mutated.push(*b ^ (1 << self.gen_range(0 .. 8)));
+                }
+                else {
+                    mutated.push(*b);
+                }
+            }
+            mutated
+        }
+        else {
+            let data_len = self.gen_range(1..remaining);
+            self.gen_vec::<u8>(data_len)
+        };
+
+        let mut b = block_header::BlockHeaderBuilder::default();
+        b.level(level)
+        .proto(proto)
+        .predecessor(predecessor)
+        .timestamp(timestamp)
+        .validation_pass(validation_pass)
+        .operations_hash(operations_hash.0)
+        .fitness(fitness)
+        .context(context.0)
+        .protocol_data(protocol_data).build().unwrap()
+    }
+}
+
+
 impl Generator<current_branch::CurrentBranch> for RandomState {
     fn gen(&mut self) -> current_branch::CurrentBranch {
-        /* Current OOM bug is triggered when there is no history */
         let history_len = self.gen_range(0..limits::CURRENT_BRANCH_HISTORY_MAX_LENGTH);
-        let history: Vec<BlockHash> = (0..history_len).map(|_|{
+        let history: Vec<BlockHash> = (1..history_len).map(|_|{
             let HashKind::<BlockHash>{0: block_hash} = self.gen();
             block_hash
         }).collect();
@@ -338,57 +535,178 @@ impl Generator<current_branch::CurrentBranch> for RandomState {
     }
 }
 
+impl Mutator<current_branch::CurrentBranch> for RandomState {
+    fn mutate(&mut self, data: current_branch::CurrentBranch) -> current_branch::CurrentBranch {
+        let current_head = self.mutate(data.current_head().clone());
+        let history = if self.gen_bool(0.5) {
+            data.history().clone()
+        }
+        else {
+            let history_len = self.gen_range(1..limits::CURRENT_BRANCH_HISTORY_MAX_LENGTH);
+            (0..history_len).map(|_|{
+                let HashKind::<BlockHash>{0: block_hash} = self.gen();
+                block_hash
+            }).collect()   
+        };
+
+        let block_hash = Self::block_hash(&current_head);
+        self.set_last_block_hash(block_hash);
+        current_branch::CurrentBranch::new(current_head, history)
+    }
+}
+
+impl Mutator<current_branch::CurrentBranchMessage> for RandomState {
+    fn mutate(&mut self, data: current_branch::CurrentBranchMessage) -> current_branch::CurrentBranchMessage {
+        let chain_id = HashKind::<ChainId>(data.chain_id().clone());
+        current_branch::CurrentBranchMessage::new(
+            self.mutate(chain_id).0,
+            self.mutate(data.current_branch().clone())
+        )
+    }
+}
+
 impl Generator<current_branch::CurrentBranchMessage> for RandomState {
     fn gen(&mut self) -> current_branch::CurrentBranchMessage {
-        current_branch::CurrentBranchMessage::new(
-            self.get_chain_id(), self.gen()
-        )
+        let current_branch = self.get_current_branch();
+
+        if current_branch.is_some() {
+            self.mutate(current_branch.unwrap())
+        }
+        else {
+            let chain_id: HashKind<ChainId> = if self.gen_bool(0.5) { self.gen() } else { HashKind{ 0: self.get_chain_id() } };
+            current_branch::CurrentBranchMessage::new(chain_id.0, self.gen())
+        }
     }
 }
 
 impl Generator<deactivate::DeactivateMessage> for RandomState {
     fn gen(&mut self) -> deactivate::DeactivateMessage {
-        // TODO: randomly use self.chain_id() too?
-        let chain_id: HashKind<ChainId> = self.gen();
+        let chain_id: HashKind<ChainId> = if self.gen_bool(0.5) {
+            self.gen()
+        }
+        else {
+            HashKind{ 0: self.get_chain_id() }
+        };
+
         deactivate::DeactivateMessage::new(chain_id.0)
     }
 }
 
 impl Generator<current_head::GetCurrentHeadMessage> for RandomState {
     fn gen(&mut self) -> current_head::GetCurrentHeadMessage {
-        // TODO: ask about existing chains?
-        let chain_id: HashKind<ChainId> = self.gen();
+        let chain_id: HashKind<ChainId> = if self.gen_bool(0.5) {
+            self.gen()
+        }
+        else {
+            HashKind{ 0: self.get_chain_id() }
+        };
+
         current_head::GetCurrentHeadMessage::new(chain_id.0)
     }
 }
 
 impl Generator<mempool::Mempool> for RandomState {
     fn gen(&mut self) -> mempool::Mempool {
+        match self.get_current_head() {
+            Some(current_head) => self.mutate(current_head.current_mempool().clone()),
+            _ => {
+                let max_count = limits::MEMPOOL_MAX_OPERATIONS;
+                let pending_num = self.gen_range(1..max_count-2);
+                let known_valid_num = self.gen_range(1..max_count-pending_num);
+                let pending: Vec<OperationHash> = (0..pending_num).map(|_|{
+                    let HashKind::<OperationHash>{0: op_hash} = self.gen();
+                    op_hash
+                }).collect();
+                let known_valid: Vec<OperationHash> = (0..known_valid_num).map(|_|{
+                    let HashKind::<OperationHash>{0: op_hash} = self.gen();
+                    op_hash
+                }).collect();
+                mempool::Mempool::new(known_valid, pending)
+            }
+        }
+    }
+}
+
+impl Mutator<mempool::Mempool> for RandomState {
+    fn mutate(&mut self, data: mempool::Mempool) -> mempool::Mempool {
         let max_count = limits::MEMPOOL_MAX_OPERATIONS;
-        let pending_num = self.gen_range(1..max_count);
-        let known_valid_num = self.gen_range(0..max_count-pending_num);
-        let pending: Vec<OperationHash> = (0..pending_num).map(|_|{
-            let HashKind::<OperationHash>{0: op_hash} = self.gen();
-            op_hash
-        }).collect();
-        let known_valid: Vec<OperationHash> = (0..known_valid_num).map(|_|{
-            let HashKind::<OperationHash>{0: op_hash} = self.gen();
-            op_hash
-        }).collect();
+
+        let known_valid = if self.gen_bool(0.5) {
+            if self.gen_bool(0.5) {
+                data.known_valid().clone()
+            }
+            else {
+                // randomly flip lists
+                data.pending().clone()
+            }
+        }
+        else {
+            let known_valid_num = self.gen_range(1..max_count);
+            (0..known_valid_num).map(|_|{
+                let HashKind::<OperationHash>{0: op_hash} = self.gen();
+                op_hash
+            }).collect()
+        };
+
+        let remaining = max_count - known_valid.len();
+
+        let pending: Vec<OperationHash> = if self.gen_bool(0.5) {
+            if self.gen_bool(0.5) { 
+                let remaining = std::cmp::min(data.pending().len(), remaining);
+                data.pending()[0..remaining].iter().cloned().collect()
+            }
+            else {
+                // randomly flip lists
+                let remaining = std::cmp::min(data.known_valid().len(), remaining);
+                data.known_valid()[0..remaining].iter().cloned().collect()
+            }
+        }
+        else {
+            let pending_num = if remaining > 1 { self.gen_range(1..remaining) } else { remaining };
+            (0..pending_num).map(|_|{
+                let HashKind::<OperationHash>{0: op_hash} = self.gen();
+                op_hash
+            }).collect()
+        };
         mempool::Mempool::new(known_valid, pending)
     }
 }
 
+
 impl Generator<current_head::CurrentHeadMessage> for RandomState {
     fn gen(&mut self) -> current_head::CurrentHeadMessage {
+        match self.get_current_head() {
+            Some(current_head) => self.mutate(current_head),
+            _ => {
+                let chain_id: HashKind<ChainId> = if self.gen_bool(0.5) {
+                    self.gen()
+                }
+                else {
+                    HashKind{ 0: self.get_chain_id() }
+                };
+        
+                current_head::CurrentHeadMessage::new(
+                    chain_id.0,
+                    self.gen(),
+                    self.gen()
+                )        
+            }
+        }
+    }
+}
+
+impl Mutator<current_head::CurrentHeadMessage> for RandomState {
+    fn mutate(&mut self, data: current_head::CurrentHeadMessage) -> current_head::CurrentHeadMessage {
+        let chain_id = HashKind::<ChainId>(data.chain_id().clone());
         current_head::CurrentHeadMessage::new(
-            self.get_chain_id(),
-            self.gen(),
-            self.gen()
+            self.mutate(chain_id).0,
+            self.mutate(data.current_block_header().clone()),
+            self.mutate(data.current_mempool().clone())
         )
     }
 }
 
+// TODO: get history
 impl Generator<block_header::GetBlockHeadersMessage> for RandomState {
     fn gen(&mut self) -> block_header::GetBlockHeadersMessage {
         let count = self.gen_range(0..limits::GET_BLOCK_HEADERS_MAX_LENGTH);
@@ -402,11 +720,23 @@ impl Generator<block_header::GetBlockHeadersMessage> for RandomState {
 
 impl Generator<block_header::BlockHeaderMessage> for RandomState {
     fn gen(&mut self) -> block_header::BlockHeaderMessage {
-        let block_header: block_header::BlockHeader = self.gen();
-        block_header::BlockHeaderMessage::from(block_header)
+        match self.get_block_header() {
+            Some(block_header) => self.mutate(block_header),
+            _ => {
+                let block_header: block_header::BlockHeader = self.gen();
+                block_header::BlockHeaderMessage::from(block_header)    
+            }
+        }
     }
 }
 
+impl Mutator<block_header::BlockHeaderMessage> for RandomState {
+    fn mutate(&mut self, data: block_header::BlockHeaderMessage) -> block_header::BlockHeaderMessage {
+        block_header::BlockHeaderMessage::from(self.mutate(data.block_header().clone()))
+    }
+}
+
+// TODO: get hashes
 impl Generator<operation::GetOperationsMessage> for RandomState {
     fn gen(&mut self) -> operation::GetOperationsMessage {
         let count = self.gen_range(0..limits::GET_OPERATIONS_MAX_LENGTH);
@@ -422,21 +752,84 @@ impl Generator<operation::Operation> for RandomState {
     fn gen(&mut self) -> operation::Operation {
         let max_size = limits::OPERATION_MAX_SIZE - BlockHash::hash_size() - 0x20;
         let size = max_size; //self.gen_range(0..max_size);
-        let last_block = self.state().last_block.clone();      
+        let last_block = match self.get_current_head() {
+            Some(head) => Self::block_hash(&head.current_block_header()),
+            _ => if self.gen_bool(0.5) {
+                self.state().last_block.clone()
+            }
+            else {
+                let bh: HashKind<BlockHash> = self.gen();
+                bh.0
+            }
+        };
+
         operation::Operation::new(
-            last_block, // TODO: pick random block hashes?
+            last_block,
             self.gen_vec(size) // TODO: Operation Message data generator!!
         )
     }
 }
 
-impl Generator<operation::OperationMessage> for RandomState {
-    fn gen(&mut self) -> operation::OperationMessage {
-        let operation: operation::Operation = self.gen();
-        operation::OperationMessage::from(operation)
+impl Mutator<operation::Operation> for RandomState {
+    fn mutate(&mut self, data: operation::Operation) -> operation::Operation {
+        let branch = if self.gen_bool(0.5) {
+            data.branch().clone()
+        }
+        else {
+            match self.get_current_head() {
+                Some(head) => Self::block_hash(&head.current_block_header()),
+                _ => if self.gen_bool(0.5) {
+                    self.state().last_block.clone()
+                }
+                else {
+                    let bh: HashKind<BlockHash> = self.gen();
+                    bh.0
+                }
+            }    
+        };
+        let data = if self.gen_bool(0.9) {
+            let bytes = data.data().clone();
+            let bytes_len = bytes.len();
+            let mut remaining_flips = if bytes_len > 0 { self.gen_range(0 .. bytes_len) >> 3 } else { bytes_len };
+            let mut mutated = Vec::new();
+            
+            for b in bytes {
+                if remaining_flips > 0 && self.gen_bool(0.1) {
+                    remaining_flips -= 1;
+                    mutated.push(b ^ (1 << self.gen_range(0 .. 8)));
+                }
+                else {
+                    mutated.push(b);
+                }
+            }
+            mutated
+        }
+        else {
+            let data_len = data.data().len();
+            let data_len = if data_len > 1 { self.gen_range(1..data_len) } else { data_len };
+            self.gen_vec::<u8>(data_len)
+        };
+        operation::Operation::new(branch, data)
     }
 }
 
+
+impl Generator<operation::OperationMessage> for RandomState {
+    fn gen(&mut self) -> operation::OperationMessage {
+        match self.get_operation() {
+            Some(operation) => {
+                let operation = operation.operation();
+                operation::OperationMessage::from(self.mutate(operation.clone()))    
+            },
+            _ => {
+                let operation: operation::Operation = self.gen();
+                operation::OperationMessage::from(operation)    
+            }
+        }
+    }
+}
+
+// TODO get hash
 impl Generator<protocol::GetProtocolsMessage> for RandomState {
     fn gen(&mut self) -> protocol::GetProtocolsMessage {
         let count = self.gen_range(0..limits::GET_PROTOCOLS_MAX_LENGTH);
@@ -450,20 +843,17 @@ impl Generator<protocol::GetProtocolsMessage> for RandomState {
 
 impl Generator<protocol::Component> for RandomState {
     fn gen(&mut self) -> protocol::Component {
-        let mut remaining = limits::PROTOCOL_COMPONENT_MAX_SIZE;
-        let size = self.gen_range(0..remaining);
+        let size = self.gen_range(0..1025);
         let name = self.gen_string(size);
-        remaining -= name.len();
-        let interface = match self.gen_t::<bool>() {
+        let interface = match self.gen_bool(0.5) {
             true => {
-                let size = self.gen_range(0..remaining);
+                let size = self.gen_range(0..102401);
                 let iface = self.gen_string(size);
-                remaining -= iface.len();
                 Some(iface)
             },
             false => None,
         };
-        let size = self.gen_range(0..remaining);
+        let size = self.gen_range(0..102401);
         let implementation = self.gen_string(size);
         protocol::Component::new(name, interface, implementation)
     }
@@ -489,6 +879,7 @@ impl Generator<protocol::Protocol> for RandomState {
     }
 }
 
+// TODO use mutator
 impl Generator<operations_for_blocks::OperationsForBlock> for RandomState {
     fn gen(&mut self) -> operations_for_blocks::OperationsForBlock {
         let block_hash: HashKind<BlockHash> = self.gen();
@@ -509,7 +900,15 @@ impl Generator<operations_for_blocks::GetOperationsForBlocksMessage> for RandomS
 
 impl Generator<protocol::ProtocolMessage> for RandomState {
     fn gen(&mut self) -> protocol::ProtocolMessage {
-        protocol::ProtocolMessage::new(self.gen())
+        let protocol = self.get_protocol();
+
+        if protocol.is_some() && self.gen_bool(0.5) {
+            // TODO mutate
+            protocol.unwrap()
+        }
+        else {
+            protocol::ProtocolMessage::new(self.gen())
+        }
     }
 }
 
@@ -518,7 +917,7 @@ impl Generator<operations_for_blocks::PathItem> for RandomState {
         /* FIXME: random sizes serialize but fail to deserialize */
         let size = 32; // self.gen_range(0..0x1000);
         let hash = self.gen_vec::<u8>(size);
-        match self.gen_t::<bool>() {
+        match self.gen_bool(0.5) {
             true => operations_for_blocks::PathItem::right(hash),
             false => operations_for_blocks::PathItem::left(hash),
         }
@@ -532,6 +931,7 @@ impl Generator<operations_for_blocks::Path> for RandomState {
     }
 }
 
+// TODO use operation mutator
 impl Generator<Vec::<operation::Operation>> for RandomState {
     fn gen(&mut self) -> Vec::<operation::Operation> {
         let mut remaining = limits::OPERATION_LIST_MAX_SIZE;
@@ -552,11 +952,39 @@ impl Generator<Vec::<operation::Operation>> for RandomState {
 
 impl Generator<operations_for_blocks::OperationsForBlocksMessage> for RandomState {
     fn gen(&mut self) -> operations_for_blocks::OperationsForBlocksMessage {
-        operations_for_blocks::OperationsForBlocksMessage::new(
-            self.gen(), // TODO: existing hash
-            self.gen(),
-            self.gen()
-        )
+        match self.get_operations_for_blocks() {
+            Some(operations_for_blocks_msg) => {
+                let operations_for_blocks = if self.gen_bool(0.5) {
+                    operations_for_blocks_msg.operations_for_block().clone()
+                }
+                else {
+                    self.gen()
+                };
+                let operations_hashes_path = if self.gen_bool(0.5) {
+                    operations_for_blocks_msg.operation_hashes_path().clone()
+                }
+                else {
+                    self.gen()
+                };
+                let operations = if self.gen_bool(0.5) {
+                    operations_for_blocks_msg.operations().clone()
+                }
+                else {
+                    self.gen()
+                };
+
+                operations_for_blocks::OperationsForBlocksMessage::new(
+                    operations_for_blocks,
+                    operations_hashes_path,
+                    operations
+                )
+            },
+            _ => operations_for_blocks::OperationsForBlocksMessage::new(
+                self.gen(),
+                self.gen(),
+                self.gen()
+            )
+        }
     }
 }
 

@@ -1,9 +1,11 @@
+// TODO: hashes
+
 use clap::{App, Arg};
 use generator::{Generator, RandomState};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 use tezos_messages::p2p::binary_message;
-use tezos_messages::p2p::encoding::{block_header, current_branch, operations_for_blocks};
+use tezos_messages::p2p::encoding::{advertise, block_header, current_branch, operations_for_blocks};
 use tokio::net::unix::SocketAddr;
 use tokio::runtime::Handle;
 
@@ -46,40 +48,46 @@ struct Credentials {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ChunkOptions {
-    flip_bits: bool,            // randomly flip bits in raw stream
-    split_chunks: bool,         // split a message into multiple chunks
-    split_bytes: bool,          // split sending of chunk bytes into multiple slices
-    incomplete_send: bool,      // randomly abort in the middle of sending bytes slices
-    max_write_bytes_sleep: u64, // randomly sleep between sending byte slices
+    flip_bits: f64,            // probability to randomly flip bits in raw stream
+    split_chunks: f64,         // probability to split a message into multiple chunks
+    split_bytes: f64,          // probability to split sending of chunk bytes into multiple slices
+    incomplete_send: f64,      // probability to randomly abort in the middle of sending bytes slices
+    write_bytes_sleep: f64,    // probability to randomly sleep between sending byte slices
+    write_bytes_sleep_ms: u64, // sleep milliseconds
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 struct HandshakeOptions {
     chunk_options: ChunkOptions,
     // connect message options
-    abort_before_connect: bool, // randomly abort before sending connect message
-    max_connect_sleep: u64,     // max random sleep between TCP connect and connect message
-    max_connect_msg_sleep: u64, // max random sleep after connect message
-    fuzz_public_key: bool,      // enable/disable public key fuzzing
-    fuzz_pow: bool,             // enable/disable Proof Of Work fuzzing
-    fuzz_network_version: bool, // enable/disable protocol version fuzzing
+    abort_before_connect: f64, // probability to randomly abort before sending connect message
+    connect_sleep: f64, // probability to randomly sleep between TCP connect and connect message
+    connect_sleep_ms: u64,     // sleep milliseconds 
+    connect_msg_sleep: f64, // probability to randomly sleep after connect message
+    connect_msg_sleep_ms: u64, // sleep milliseconds 
+    fuzz_public_key: f64,      // probability to fuzz public key
+    fuzz_pow: f64,             // probability to fuzz Proof Of Work fuzzing
+    fuzz_network_version: f64, // probability to fuzz protocol version fuzzing
     // metadata message options
-    abort_before_metadata: bool, // randomly abort before sending metadata message
-    max_metadata_msg_sleep: u64, // max random sleep after metadata message
-    always_recv_metadata: bool,  // attempt to recv metadata message from peer
-    fuzz_metadata: bool,         // enable/disable metadata fuzzing
+    abort_before_metadata: f64, // probability to randomly abort before sending metadata message
+    metadata_msg_sleep: f64, // probability yo random sleep after metadata message
+    metadata_msg_sleep_ms: u64, 
+    recv_metadata: f64,  // probability to attempt to recv metadata message from peer
+    fuzz_metadata: f64,         // probability to fuzz metadata
     // ack message options
-    abort_before_ack: bool,   // randomly abort before sending ack message
-    max_ack_msg_sleep: u64,   // max random sleep after ack message
-    ack_replies: Vec<String>, // possible replies to generate randomly: Ack, NackV0, Nack
-    always_recv_ack: bool,    // attempt to recv ack message from peer
+    abort_before_ack: f64,   // probability to randomly abort before sending ack message
+    ack_msg_sleep: f64, // probability to randomly sleep after ack message
+    ack_msg_sleep_ms: u64,
+    fuzz_ack_replies: f64, // probability to randomly fuzz ack reply
+    recv_ack: f64,    // probability to attempt to recv ack message from peer
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 struct PeerMessageReplyOptions {
-    get_current_branch: bool,        // reply to GetCurrentBranch requests
-    get_block_headers: bool,         // reply to GetBlockHeaders requests
-    get_operations_for_blocks: bool, // reply to GetOperationsForBlocks requests
+    bootstrap: f64,                 // probability to reply to Bootstrap requests
+    get_current_branch: f64,        // probability to reply to GetCurrentBranch requests
+    get_block_headers: f64,         // probability to reply to GetBlockHeaders requests
+    get_operations_for_blocks: f64, // probability to reply to GetOperationsForBlocks requests
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -91,7 +99,7 @@ struct PeerMessageOptions {
     // Deactivate, GetCurrentHead, CurrentHead, GetBlockHeaders,
     // BlockHeader, GetOperations, Operation, GetProtocols,
     // Protocol, GetOperationsForBlocks, OperationsForBlocks
-    push_throughput: u64,      // number of messages send in burst
+    max_push_throughput: u64,      // max number of messages send in burst
     block_header_limit: usize, // max block-header cache size
     reply_options: Option<PeerMessageReplyOptions>,
 }
@@ -106,60 +114,9 @@ struct Profile {
     peer_message_fuzzing: Option<PeerMessageOptions>,
 }
 
-static DEFAULT_IDENTITY: &'static str = r#"
-[{
-    "peer_id":"idt3LoYeur2FXAvRXsvmW2Ac9EpEHb",
-    "public_key":"f0c7f2fdf2e6effb32fb6d750051dc63512b5bd8d16ac7aa110f4f4fc840552e",
-    "proof_of_work_stamp":"d5a8e2140d85615201c0e08b1bd22780b8d766af9be06123",
-    "secret_key":"051a6c62253e37577de1031fee4e584487494d6da8186dba608a894ba2834a40"
-}]
-"#;
-
-static DEFAULT_PROFILE: &'static str = r#"
-{
-    "peer": "172.28.0.0:9732",
-    "prng_seed": 1234567890,
-    "max_chunk_size": 65519,
-    "threads": 1,
-    "handshake_fuzzing": null,
-    "peer_message_fuzzing": {
-        "chunk_options": {
-            "flip_bits": false,
-            "split_chunks": true,
-            "split_bytes": false,
-            "incomplete_send": false,
-            "max_write_bytes_sleep": 0
-        },
-        "messages_per_chunk": 1,
-        "push_messages": [
-            "Disconnect",
-            "Bootstrap",
-            "Advertise",
-            "SwapRequest",
-            "SwapAck",
-            "GetCurrentBranch",
-            "CurrentBranch",
-            "Deactivate",
-            "GetCurrentHead",
-            "CurrentHead",
-            "GetBlockHeaders",
-            "BlockHeader",
-            "GetOperations",
-            "Operation",
-            "GetProtocols",
-            "Protocol",
-            "GetOperationsForBlocks",
-            "OperationsForBlocks"    
-        ],
-        "push_throughput": 65536,
-        "block_header_limit": 0,
-        "reply_options": null
-    }
-}"#;
-
-async fn rand_sleep(max_duration: u64, generator: &mut generator::RandomState) {
-    if max_duration > 0 {
-        sleep(Duration::from_millis(generator.gen_range(0..max_duration))).await;
+async fn rand_sleep(duration: u64, generator: &mut generator::RandomState) {
+    if duration > 0 {
+        sleep(Duration::from_millis(duration)).await;
     }
 }
 
@@ -221,21 +178,23 @@ async fn write_bytes(
     bytes: &Vec<u8>,
     stream: &mut TcpStream,
 ) -> Result<()> {
-    let chunks = match options.split_bytes && generator.gen_t::<bool>() {
+    let chunks = match generator.gen_bool(options.split_bytes) {
         true => generator.gen_byte_chunks(bytes.clone()),
         false => vec![bytes.clone()],
     };
 
-    let incomplete_send = options.incomplete_send && generator.gen_t::<bool>();
+    let incomplete_send = generator.gen_bool(options.incomplete_send);
 
     for chunk in chunks {
         stream.write_all(chunk.as_slice()).await?;
 
-        if incomplete_send && generator.gen_t::<bool>() {
+        if incomplete_send {
             return Ok(());
         }
 
-        rand_sleep(options.max_write_bytes_sleep, generator).await;
+        if generator.gen_bool(options.write_bytes_sleep) {
+            rand_sleep(options.write_bytes_sleep_ms, generator).await;
+        }
     }
 
     Ok(())
@@ -250,7 +209,7 @@ async fn write_bytes_encrypted(
     nonce: &mut Nonce,
 ) -> Result<()> {
     const MACBYTES: usize = 16;
-    let bytes = if options.flip_bits {
+    let bytes = if generator.gen_bool(options.flip_bits) {
         let mut remaining_flips = generator.gen_range(0 .. bytes.len()) >> 3;
         let mut mutated = Vec::new();
         
@@ -269,7 +228,7 @@ async fn write_bytes_encrypted(
         bytes.clone()
     };
 
-    let chunks = match options.split_chunks && generator.gen_t::<bool>() {
+    let chunks = match generator.gen_bool(options.split_chunks) {
         true => generator.gen_chunks(bytes.clone(), key, nonce),
         false => bytes
             .as_slice()
@@ -353,8 +312,8 @@ async fn fuzz_peer_messages(
     local: &mut Nonce,
 ) -> Result<()> {
     let messages = &options.push_messages;
-    let mut remaining = options.push_throughput;
-    eprintln!("Pushing {} messages in burst...", options.push_throughput);
+    let mut remaining = generator.gen_range(1..options.max_push_throughput);
+    eprintln!("Pushing {} messages in burst...", remaining);
 
     loop {
         if options.messages_per_chunk > remaining {
@@ -421,9 +380,25 @@ async fn handle_response(
         let m = read_msg::<PeerMessageResponse>(stream, buffer, &key, remote, true).await?;
         eprintln!("recv msg {:?}", m);
         match m.message {
+            PeerMessage::Bootstrap => {
+                if generator.gen_bool(reply_options.bootstrap) {
+                    let msg: advertise::AdvertiseMessage = generator.gen();
+                    eprintln!("sending Advertise");
+                    write_msg(
+                        &options.chunk_options,
+                        generator,
+                        &PeerMessageResponse::from(msg),
+                        stream,
+                        &key,
+                        local,
+                    )
+                    .await?;
+                }
+            },
             PeerMessage::GetCurrentBranch(current_branch::GetCurrentBranchMessage { chain_id }) => {
-                if reply_options.get_current_branch {
-                    generator.set_chain_id(chain_id);
+                generator.set_chain_id(chain_id);
+
+                if generator.gen_bool(reply_options.get_current_branch) {
                     let msg: current_branch::CurrentBranchMessage = generator.gen();
                     eprintln!("sending CurrentBranch");
                     write_msg(
@@ -436,26 +411,28 @@ async fn handle_response(
                     )
                     .await?;
                 }
-            }
+            },
             PeerMessage::GetBlockHeaders(bh) => {
-                if reply_options.get_block_headers {
+                if generator.gen_bool(reply_options.get_block_headers) {
                     for block_hash in bh.get_block_headers() {
                         let msg = generator.get_block(block_hash);
-                        eprintln!("sending BlockHeader");
-                        write_msg(
-                            &options.chunk_options,
-                            generator,
-                            &PeerMessageResponse::from(msg),
-                            stream,
-                            &key,
-                            local,
-                        )
-                        .await?;
+                        if msg.is_some() {
+                            eprintln!("sending BlockHeader");
+                            write_msg(
+                                &options.chunk_options,
+                                generator,
+                                &PeerMessageResponse::from(msg.unwrap()),
+                                stream,
+                                &key,
+                                local,
+                            )
+                            .await?;    
+                        }
                     }
                 }
-            }
+            },
             PeerMessage::GetOperationsForBlocks(ops) => {
-                if reply_options.get_operations_for_blocks {
+                if generator.gen_bool(reply_options.get_operations_for_blocks) {
                     for operations_for_block in ops.get_operations_for_blocks() {
                         let msg = operations_for_blocks::OperationsForBlocksMessage::new(
                             operations_for_block.clone(),
@@ -474,7 +451,32 @@ async fn handle_response(
                         .await?;
                     }
                 }
-            }
+            },
+            PeerMessage::CurrentBranch(current_branch) => {
+                eprintln!("saving CurrentBranch");
+                generator.set_current_branch(current_branch);
+            },
+            PeerMessage::CurrentHead(current_head) => {
+                eprintln!("saving CurrentHead");
+                generator.set_chain_id(current_head.chain_id().clone());
+                generator.set_current_head(current_head);
+            },
+            PeerMessage::BlockHeader(block_header) => {
+                eprintln!("saving BlockHeader");
+                generator.set_block_header(block_header);
+            },
+            PeerMessage::Operation(operation) => {
+                eprintln!("saving Operation");
+                generator.set_operation(operation);
+            },
+            PeerMessage::Protocol(protocol) => {
+                eprintln!("saving Protocol");
+                generator.set_protocol(protocol);
+            },
+            PeerMessage::OperationsForBlocks(operations_for_blocks) => {
+                eprintln!("saving OperationsForBlocks");
+                generator.set_operations_for_blocks(operations_for_blocks);
+            },
             _ => (),
         }
     }
@@ -490,26 +492,31 @@ async fn fuzz(
     let options = match profile.handshake_fuzzing.borrow() {
         None => HandshakeOptions {
             chunk_options: ChunkOptions {
-                flip_bits: false,
-                split_chunks: false,
-                split_bytes: false,
-                incomplete_send: false,
-                max_write_bytes_sleep: 0,
+                flip_bits: 0.01,
+                split_chunks: 0.01,
+                split_bytes: 0.01,
+                incomplete_send: 0.01,
+                write_bytes_sleep: 0.01, 
+                write_bytes_sleep_ms: 20000,
             },
-            abort_before_connect: false,
-            max_connect_sleep: 0,
-            max_connect_msg_sleep: 0,
-            fuzz_public_key: false,
-            fuzz_pow: false,
-            fuzz_network_version: false,
-            abort_before_metadata: false,
-            max_metadata_msg_sleep: 0,
-            always_recv_metadata: true,
-            fuzz_metadata: false,
-            abort_before_ack: false,
-            max_ack_msg_sleep: 0,
-            ack_replies: vec![String::from("Ack")],
-            always_recv_ack: true,
+            abort_before_connect: 0.01,
+            connect_sleep: 0.01,
+            connect_sleep_ms: 20000,
+            connect_msg_sleep: 0.01,
+            connect_msg_sleep_ms: 20000,
+            fuzz_public_key: 0.01,
+            fuzz_pow: 0.01,
+            fuzz_network_version: 0.01,
+            abort_before_metadata: 0.01,
+            metadata_msg_sleep: 0.01,
+            metadata_msg_sleep_ms: 20000,
+            recv_metadata: 0.9,
+            fuzz_metadata: 0.01,
+            abort_before_ack: 0.01,
+            ack_msg_sleep: 0.01,
+            ack_msg_sleep_ms: 20000,
+            fuzz_ack_replies: 0.01,
+            recv_ack: 0.9,
         },
         Some(opt) => opt.clone(),
     };
@@ -537,23 +544,25 @@ async fn fuzz(
 
     let identity = identities.get(generator.gen_range(0..identities.len())).unwrap();
 
-    if options.abort_before_connect && generator.gen_t::<bool>() {
+    if generator.gen_bool(options.abort_before_connect) {
         return Ok(());
     }
 
-    rand_sleep(options.max_connect_sleep, generator).await;
+    if generator.gen_bool(options.connect_sleep) {
+        rand_sleep(options.connect_sleep_ms, generator).await;
+    }
 
-    let version = match options.fuzz_network_version && generator.gen_t::<bool>() {
+    let version = match generator.gen_bool(options.fuzz_network_version) {
         false => NetworkVersion::new("TEZOS_MAINNET".to_string(), 0, 1),
         true => generator.gen(),
     };
 
-    let public_key = match options.fuzz_public_key && generator.gen_t::<bool>() {
+    let public_key = match generator.gen_bool(options.fuzz_public_key) {
         false => identity.public_key.clone(),
         true => generator.gen(),
     };
 
-    let pow = match options.fuzz_pow && generator.gen_t::<bool>() {
+    let pow = match generator.gen_bool(options.fuzz_pow) {
         false => identity.proof_of_work_stamp.clone(),
         true => generator.gen(),
     };
@@ -577,11 +586,13 @@ async fn fuzz(
     )
     .await?;
 
-    if options.abort_before_metadata && generator.gen_t::<bool>() {
+    if generator.gen_bool(options.abort_before_metadata) {
         return Ok(());
     }
 
-    rand_sleep(options.max_connect_msg_sleep, generator).await;
+    if generator.gen_bool(options.connect_msg_sleep) {
+        rand_sleep(options.connect_msg_sleep_ms, generator).await;
+    }
 
     let mut buffer = ChunkBuffer::default();
     let responder_chunk = buffer.read_chunk(&mut stream).await?;
@@ -597,7 +608,7 @@ async fn fuzz(
         mut remote,
     } = generate_nonces(&initiator_chunk.raw(), &responder_chunk.raw(), false).unwrap();
 
-    let metadata = match options.fuzz_metadata && generator.gen_t::<bool>() {
+    let metadata = match generator.gen_bool(options.fuzz_metadata) {
         false => MetadataMessage::new(false, false),
         true => generator.gen(),
     };
@@ -612,24 +623,31 @@ async fn fuzz(
     )
     .await?;
 
-    if options.always_recv_metadata || generator.gen_t::<bool>() {
+    if generator.gen_bool(options.recv_metadata) {
         let _m =
             read_msg::<MetadataMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
         //eprintln!("metadata {:?}", _m);
     }
 
-    if options.abort_before_ack && generator.gen_t::<bool>() {
+    if generator.gen_bool(options.abort_before_ack) {
         return Ok(());
     }
 
-    rand_sleep(options.max_metadata_msg_sleep, generator).await;
+    if generator.gen_bool(options.metadata_msg_sleep) {
+        rand_sleep(options.metadata_msg_sleep_ms, generator).await;
+    }
 
-    let index = generator.gen_range(0..options.ack_replies.len());
-    let ack: AckMessage = match &options.ack_replies.get(index).unwrap()[..] {
-        "Ack" => AckMessage::Ack,
-        "NackV0" => AckMessage::NackV0,
-        _ => AckMessage::Nack(generator.gen()),
+    let ack = if generator.gen_bool(options.fuzz_ack_replies) {
+        match generator.gen_bool(0.5) {
+            true => AckMessage::NackV0,
+            _ => AckMessage::Nack(generator.gen())
+        }   
+    }
+    else
+    {
+        AckMessage::Ack
     };
+
     //eprintln!("send ack");
     write_msg(
         &options.chunk_options,
@@ -640,32 +658,39 @@ async fn fuzz(
         &mut local,
     )
     .await?;
-    rand_sleep(options.max_ack_msg_sleep, generator).await;
 
-    if (options.always_recv_metadata && options.always_recv_ack) || generator.gen_t::<bool>() {
+    if generator.gen_bool(options.ack_msg_sleep) {
+        rand_sleep(options.ack_msg_sleep_ms, generator).await;
+    }
+
+    if generator.gen_bool(options.recv_ack) {
         //eprintln!("recv ack");
         read_msg::<AckMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
     }
 
+    // TODO: send get current head/current branch?
+
     if let Some(peer_message_options) = profile.peer_message_fuzzing.borrow() {
-        handle_response(
-            &peer_message_options,
-            generator,
-            &mut stream,
-            &key,
-            &mut local,
-            &mut remote,
-            &mut buffer,
-        )
-        .await?;
-        fuzz_peer_messages(
-            &peer_message_options,
-            generator,
-            &mut stream,
-            &key,
-            &mut local,
-        )
-        .await?;
+        loop {
+            handle_response(
+                &peer_message_options,
+                generator,
+                &mut stream,
+                &key,
+                &mut local,
+                &mut remote,
+                &mut buffer,
+            )
+            .await?;
+            fuzz_peer_messages(
+                &peer_message_options,
+                generator,
+                &mut stream,
+                &key,
+                &mut local,
+            )
+            .await?;
+        }
     }
 
     Ok(())
@@ -713,23 +738,22 @@ async fn main() {
         )
         .get_matches();
 
-    let config = match matches.value_of("config") {
-        Some(file) => std::fs::read_to_string(file).unwrap(),
-        None => DEFAULT_PROFILE.to_string(),
-    };
-
+    let config = std::fs::read_to_string(matches.value_of("config").unwrap()).unwrap();
     let identities = serde_json::from_str::<Vec<Credentials>>(&
-        match matches.value_of("identities") {
-            Some(file) => std::fs::read_to_string(file).unwrap(),
-            None => DEFAULT_IDENTITY.to_string(),
-    }).unwrap().iter().map(|x| {
-        Identity {
-            peer_id: CryptoboxPublicKeyHash::from_base58_check(&x.peer_id).unwrap(),
-            public_key: PublicKey::from_hex(&x.public_key).unwrap(),
-            secret_key: SecretKey::from_hex(&x.secret_key).unwrap(),
-            proof_of_work_stamp: ProofOfWork::from_hex(&x.proof_of_work_stamp).unwrap(),
-        }
-    }).collect::<Vec<Identity>>();
+        std::fs::read_to_string(
+            matches.value_of("identities").unwrap()
+        )
+        .unwrap())
+        .unwrap()
+        .iter()
+        .map(|x| {
+            Identity {
+                peer_id: CryptoboxPublicKeyHash::from_base58_check(&x.peer_id).unwrap(),
+                public_key: PublicKey::from_hex(&x.public_key).unwrap(),
+                secret_key: SecretKey::from_hex(&x.secret_key).unwrap(),
+                proof_of_work_stamp: ProofOfWork::from_hex(&x.proof_of_work_stamp).unwrap(),
+            }
+        }).collect::<Vec<Identity>>();
 
     let max_fd = fdlimit::raise_fd_limit().unwrap();
     eprintln!("current fd limit {}", max_fd);
