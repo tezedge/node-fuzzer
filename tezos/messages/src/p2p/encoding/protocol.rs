@@ -18,6 +18,11 @@ impl ProtocolMessage {
     pub fn new(protocol: Protocol) -> Self {
         Self { protocol }
     }
+
+    pub fn protocol(&self) -> &Protocol {
+        &self.protocol
+    }
+
 }
 // -----------------------------------------------------------------------------------------------
 #[derive(Serialize, Deserialize, Debug, Clone, HasEncoding, NomReader)]
@@ -35,6 +40,19 @@ impl Component {
     ) -> Self {
         Self { name, interface, implementation }
     }
+
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+
+    pub fn interface(&self) -> &Option<String> {
+        &self.interface
+    }
+
+    pub fn implementation(&self) -> &String {
+        &self.implementation
+    }
+
 }
 // -----------------------------------------------------------------------------------------------
 #[derive(Serialize, Deserialize, Debug, Clone, HasEncoding, NomReader)]

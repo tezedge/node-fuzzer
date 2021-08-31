@@ -859,8 +859,39 @@ impl Generator<protocol::Component> for RandomState {
     }
 }
 
-impl Generator<protocol::Protocol> for RandomState {
-    fn gen(&mut self) -> protocol::Protocol {
+impl Mutator<protocol::Component> for RandomState {
+    fn mutate(&mut self, data: protocol::Component) -> protocol::Component {
+        let name = if self.gen_bool(0.5) {
+            let size = self.gen_range(0..1025);
+            self.gen_string(size)
+        }
+        else {
+            data.name().clone()
+        };
+
+        let interface = match self.gen_range(0..3) {
+            0 => {
+                let size = self.gen_range(0..102401);
+                let iface = self.gen_string(size);
+                Some(iface)
+            },
+            1 => None,
+            _ => data.interface().clone()
+        };
+        let implementation = if self.gen_bool(0.5) {
+            let size = self.gen_range(0..102401);
+            self.gen_string(size)
+        }
+        else {
+            data.implementation().clone()
+        };
+
+        protocol::Component::new(name, interface, implementation)
+    }
+}
+
+impl Generator<Vec<protocol::Component>> for RandomState {
+    fn gen(&mut self) -> Vec<protocol::Component> {
         let mut components: Vec<protocol::Component> = Vec::new();
         let mut remaining = limits::PROTOCOL_COMPONENT_MAX_SIZE;
 
@@ -875,16 +906,77 @@ impl Generator<protocol::Protocol> for RandomState {
             remaining -= size;
             components.push(component);
         }
-        protocol::Protocol::new(self.gen_t(), components)
+        components
     }
 }
 
-// TODO use mutator
+impl Mutator<Vec<protocol::Component>> for RandomState {
+    fn mutate(&mut self, data: Vec<protocol::Component>) -> Vec<protocol::Component> {
+        data.iter().cloned().map(|x| { self.mutate(x) }).collect()
+    }
+}
+
+impl Generator<protocol::Protocol> for RandomState {
+    fn gen(&mut self) -> protocol::Protocol {
+        protocol::Protocol::new(self.gen_t(), self.gen())
+    }
+}
+
+impl Mutator<protocol::Protocol> for RandomState {
+    fn mutate(&mut self, data: protocol::Protocol) -> protocol::Protocol {
+        let expected_env_version = if self.gen_bool(0.5) {
+            data.expected_env_version()
+        }
+        else {
+            self.gen_t()
+        };
+       
+        protocol::Protocol::new(
+            expected_env_version,
+            self.mutate(data.components().clone())
+        )
+    }
+}
+
+impl Generator<protocol::ProtocolMessage> for RandomState {
+    fn gen(&mut self) -> protocol::ProtocolMessage {
+        match self.get_protocol() {
+            Some(protocol) => self.mutate(protocol),
+            _ => protocol::ProtocolMessage::new(self.gen())
+        }
+    }
+}
+
+impl Mutator<protocol::ProtocolMessage> for RandomState {
+    fn mutate(&mut self, data: protocol::ProtocolMessage) -> protocol::ProtocolMessage {         
+        protocol::ProtocolMessage::new(self.mutate(data.protocol().clone()))
+    }
+}
+
+// TODO use mutator (TODO?)
 impl Generator<operations_for_blocks::OperationsForBlock> for RandomState {
     fn gen(&mut self) -> operations_for_blocks::OperationsForBlock {
-        let block_hash: HashKind<BlockHash> = self.gen();
+        let block_hash = match self.get_current_branch() {
+            Some(cb) => {
+                let history = cb.current_branch().history();
+                let random_index = self.gen_range(0..history.len());
+                history[random_index].clone()
+            },
+            _ => {
+                match self.get_block_header() {
+                    Some(bh) => Self::block_hash(bh.block_header()),
+                    _ => match self.get_current_head() {
+                        Some(ch) => Self::block_hash(ch.current_block_header()),
+                        _ => {
+                            let bh: HashKind<BlockHash> = self.gen();
+                            bh.0
+                        }
+                    }
+                }
+            }
+        };
         operations_for_blocks::OperationsForBlock::new(
-            block_hash.0, self.gen_t()
+            block_hash, self.gen_t()
         )
     }
 }
@@ -898,19 +990,7 @@ impl Generator<operations_for_blocks::GetOperationsForBlocksMessage> for RandomS
     }
 }
 
-impl Generator<protocol::ProtocolMessage> for RandomState {
-    fn gen(&mut self) -> protocol::ProtocolMessage {
-        let protocol = self.get_protocol();
 
-        if protocol.is_some() && self.gen_bool(0.5) {
-            // TODO mutate
-            protocol.unwrap()
-        }
-        else {
-            protocol::ProtocolMessage::new(self.gen())
-        }
-    }
-}
 
 impl Generator<operations_for_blocks::PathItem> for RandomState {
     fn gen(&mut self) -> operations_for_blocks::PathItem {
