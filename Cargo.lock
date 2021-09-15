@@ -1952,6 +1952,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "json-pointer"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fe841b94e719a482213cee19dd04927cf412f26d8dc84c5a446c081e49c2997"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "kv-log-macro"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3334,6 +3343,7 @@ dependencies = [
  "hyper",
  "rand 0.8.4",
  "serde 1.0.123",
+ "serde-json-schema",
  "serde_json",
  "structopt",
  "tokio",
@@ -3555,6 +3565,18 @@ dependencies = [
  "num-traits 0.1.43",
  "regex",
  "serde 0.8.23",
+]
+
+[[package]]
+name = "serde-json-schema"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "221b043b263483740488a35b3b724807fd6fca2c078785074db3d52ecc5a6554"
+dependencies = [
+ "json-pointer",
+ "serde 1.0.123",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -4697,6 +4719,7 @@ dependencies = [
  "idna",
  "matches",
  "percent-encoding",
+ "serde 1.0.123",
 ]
 
 [[package]]
