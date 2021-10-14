@@ -1,8 +1,8 @@
+// Copyright (c) SimpleStaking, Viable Systems and Tezedge Contributors
+// SPDX-License-Identifier: MIT
 use clap::{App, Arg};
-//use tokio::runtime::Handle;
 use futures::future::join_all;
 use tezos_identity::Identity;
-use crypto::proof_of_work::ProofOfWork;
 
 
 #[tokio::main]

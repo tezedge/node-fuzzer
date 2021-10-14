@@ -1,3 +1,5 @@
+// Copyright (c) SimpleStaking, Viable Systems and Tezedge Contributors
+// SPDX-License-Identifier: MIT
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -32,7 +34,6 @@ use tezos_messages::p2p::encoding::{
     limits,
     mempool, 
     operation,
-    peer,
     swap,
     protocol,
     operations_for_blocks,
@@ -43,7 +44,7 @@ use tezos_messages::p2p::encoding::{
 }; 
 
 use crypto::{
-    crypto_box::{CryptoKey, PublicKey, SecretKey, PrecomputedKey, CRYPTO_KEY_SIZE},
+    crypto_box::{CryptoKey, PublicKey, PrecomputedKey, CRYPTO_KEY_SIZE},
     hash::*,
     proof_of_work::{ProofOfWork, POW_SIZE},
     nonce::{Nonce, NONCE_SIZE}
@@ -346,7 +347,6 @@ impl Generator<advertise::AdvertiseMessage> for RandomState {
 
 impl Generator<swap::SwapMessage> for RandomState {
     fn gen(&mut self) -> swap::SwapMessage {
-        //let point = "127.0.0.1:12345".to_string();
         let size_bytes = self.gen_range(0..limits::P2P_POINT_MAX_LENGTH);
         let peer_id: HashKind<CryptoboxPublicKeyHash> = self.gen();
         swap::SwapMessage::new(self.gen_string(size_bytes), peer_id.0)
@@ -500,7 +500,6 @@ impl Mutator<block_header::BlockHeader> for RandomState {
     }
 }
 
-
 impl Generator<current_branch::CurrentBranch> for RandomState {
     fn gen(&mut self) -> current_branch::CurrentBranch {
         let history_len = self.gen_range(0..limits::CURRENT_BRANCH_HISTORY_MAX_LENGTH);
@@ -636,7 +635,6 @@ impl Mutator<mempool::Mempool> for RandomState {
                 data.known_valid().clone()
             }
             else {
-                // randomly flip lists
                 data.pending().clone()
             }
         }
@@ -656,7 +654,6 @@ impl Mutator<mempool::Mempool> for RandomState {
                 data.pending()[0..remaining].iter().cloned().collect()
             }
             else {
-                // randomly flip lists
                 let remaining = std::cmp::min(data.known_valid().len(), remaining);
                 data.known_valid()[0..remaining].iter().cloned().collect()
             }
@@ -671,7 +668,6 @@ impl Mutator<mempool::Mempool> for RandomState {
         mempool::Mempool::new(known_valid, pending)
     }
 }
-
 
 impl Generator<current_head::CurrentHeadMessage> for RandomState {
     fn gen(&mut self) -> current_head::CurrentHeadMessage {
@@ -736,7 +732,6 @@ impl Mutator<block_header::BlockHeaderMessage> for RandomState {
     }
 }
 
-// TODO: get hashes
 impl Generator<operation::GetOperationsMessage> for RandomState {
     fn gen(&mut self) -> operation::GetOperationsMessage {
         let count = self.gen_range(0..limits::GET_OPERATIONS_MAX_LENGTH);
@@ -765,7 +760,7 @@ impl Generator<operation::Operation> for RandomState {
 
         operation::Operation::new(
             last_block,
-            self.gen_vec(size) // TODO: Operation Message data generator!!
+            self.gen_vec(size) // TODO: tezos protocol-aware generator
         )
     }
 }
@@ -813,7 +808,6 @@ impl Mutator<operation::Operation> for RandomState {
     }
 }
 
-
 impl Generator<operation::OperationMessage> for RandomState {
     fn gen(&mut self) -> operation::OperationMessage {
         match self.get_operation() {
@@ -829,7 +823,6 @@ impl Generator<operation::OperationMessage> for RandomState {
     }
 }
 
-// TODO get hash
 impl Generator<protocol::GetProtocolsMessage> for RandomState {
     fn gen(&mut self) -> protocol::GetProtocolsMessage {
         let count = self.gen_range(0..limits::GET_PROTOCOLS_MAX_LENGTH);
@@ -953,7 +946,7 @@ impl Mutator<protocol::ProtocolMessage> for RandomState {
     }
 }
 
-// TODO use mutator (TODO?)
+// TODO: use mutator
 impl Generator<operations_for_blocks::OperationsForBlock> for RandomState {
     fn gen(&mut self) -> operations_for_blocks::OperationsForBlock {
         let block_hash = match self.get_current_branch() {
@@ -990,12 +983,9 @@ impl Generator<operations_for_blocks::GetOperationsForBlocksMessage> for RandomS
     }
 }
 
-
-
 impl Generator<operations_for_blocks::PathItem> for RandomState {
     fn gen(&mut self) -> operations_for_blocks::PathItem {
-        /* FIXME: random sizes serialize but fail to deserialize */
-        let size = 32; // self.gen_range(0..0x1000);
+        let size = 32;
         let hash = self.gen_vec::<u8>(size);
         match self.gen_bool(0.5) {
             true => operations_for_blocks::PathItem::right(hash),
@@ -1011,7 +1001,7 @@ impl Generator<operations_for_blocks::Path> for RandomState {
     }
 }
 
-// TODO use operation mutator
+// TODO: use mutator
 impl Generator<Vec::<operation::Operation>> for RandomState {
     fn gen(&mut self) -> Vec::<operation::Operation> {
         let mut remaining = limits::OPERATION_LIST_MAX_SIZE;

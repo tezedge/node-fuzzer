@@ -1,6 +1,5 @@
-// TODOS: print response time, and body size
-// custom logic for injection endpoints
-// ...get contract ids, generate {contract_id}
+// Copyright (c) SimpleStaking, Viable Systems and Tezedge Contributors
+// SPDX-License-Identifier: MIT
 
 use clap::{App, Arg};
 use futures::{future::join_all, Future};
@@ -117,16 +116,6 @@ fn random_arg(
         return hc_str.to_string();
     }
 
-    /*if rng.gen_bool(0.1) {
-        return encode(random_string(rng, size).as_str()).to_string()
-    }*/
-
-    /*
-    const CHARSET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    let string: String = (0..size)
-    .map(|_|{CHARSET[rng.gen_range(0..CHARSET.len())] as char}).collect();
-    string
-    */
     random_number(rng, size)
 }
 
@@ -208,16 +197,16 @@ fn random_json(rng: &mut SmallRng, prop: Option<&PropertyInstance>, size: usize)
                         "false".to_string()
                     }
                 }
-                PropertyInstance::Integer { criteria } => {
+                PropertyInstance::Integer { .. } => {
                     format!("\"{}\"", random_number(rng, size))
                 }
-                PropertyInstance::Number { criteria } => {
+                PropertyInstance::Number { ..  } => {
                     format!("\"{}\"", random_number(rng, size))
                 }
                 PropertyInstance::Array { items } => random_json_list(rng, Some(&*items), size),
                 PropertyInstance::Object {
                     properties,
-                    required,
+                    ..
                 } => {
                     let mut ret = "{\"".to_string();
 
@@ -240,7 +229,6 @@ fn random_json(rng: &mut SmallRng, prop: Option<&PropertyInstance>, size: usize)
                         ret.pop();
                     }
                     ret.push_str("}");
-                    //println!("{}", ret);
                     ret
                 }
                 PropertyInstance::String => format!("\"{}\"", random_string(rng, size)),
@@ -482,7 +470,6 @@ fn parse_method(meth: &String, value: &Value) -> PathMethod {
 
     if meth_info.contains_key("parameters") {
         for param in meth_info["parameters"].as_array().unwrap() {
-            //eprintln!("{}", param["name"]);
             match param["in"].as_str().unwrap() {
                 "path" => path_params.push(parse_parameter(param)),
                 "query" => query_params.push(parse_parameter(param)),
@@ -575,7 +562,6 @@ async fn main() {
     let seed = matches.value_of("seed").unwrap().parse::<u64>().unwrap();
     let threads = matches.value_of("threads").unwrap().parse::<u64>().unwrap();
     let _max_fd = fdlimit::raise_fd_limit().unwrap();
-    //eprintln!("current fd limit {}", _max_fd);
 
     let mut paths: Vec<Path> = Vec::new();
 

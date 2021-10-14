@@ -15,8 +15,6 @@ hex = "0.4"
 serde_json = "1.0"
 clap = "2.33"
 serde = { version = "1.0", features = ["derive", "rc"] }
-crypto = { path = "../crypto" }
-logging = { path = "../logging" }
 tezos_identity = { path = "../tezos/identity" }
 
 [dev-dependencies]
@@ -30,6 +28,4 @@ hex = "0.4"
 serde_json = "1.0"
 clap = "2.33"
 serde = { version = "1.0", features = ["derive", "rc"] }
-crypto = { path = "../crypto" }
-logging = { path = "../logging" }
 tezos_identity = { path = "../tezos/identity" }

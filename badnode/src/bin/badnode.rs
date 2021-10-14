@@ -1,19 +1,17 @@
-// TODO: hashes
-
+// Copyright (c) SimpleStaking, Viable Systems and Tezedge Contributors
+// SPDX-License-Identifier: MIT
 use clap::{App, Arg};
 use generator::{Generator, RandomState};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 use tezos_messages::p2p::binary_message;
-use tezos_messages::p2p::encoding::{advertise, block_header, current_branch, operations_for_blocks};
-use tokio::net::unix::SocketAddr;
-use tokio::runtime::Handle;
+use tezos_messages::p2p::encoding::{advertise, current_branch, operations_for_blocks};
 
 use futures::future::join_all;
 use std::borrow::Borrow;
 use std::convert::{TryFrom, TryInto};
-use std::io::{Error, ErrorKind, Read, Result};
-use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use std::io::{Error, ErrorKind, Result};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
@@ -31,7 +29,6 @@ use tezos_messages::p2p::{
     encoding::{
         ack::AckMessage,
         connection::ConnectionMessage,
-        current_branch::GetCurrentBranchMessage,
         metadata::MetadataMessage,
         peer::{PeerMessage, PeerMessageResponse},
         version::NetworkVersion,
@@ -114,7 +111,7 @@ struct Profile {
     peer_message_fuzzing: Option<PeerMessageOptions>,
 }
 
-async fn rand_sleep(duration: u64, generator: &mut generator::RandomState) {
+async fn sleep_ms(duration: u64) {
     if duration > 0 {
         sleep(Duration::from_millis(duration)).await;
     }
@@ -193,7 +190,7 @@ async fn write_bytes(
         }
 
         if generator.gen_bool(options.write_bytes_sleep) {
-            rand_sleep(options.write_bytes_sleep_ms, generator).await;
+            sleep_ms(options.write_bytes_sleep_ms).await;
         }
     }
 
@@ -549,7 +546,7 @@ async fn fuzz(
     }
 
     if generator.gen_bool(options.connect_sleep) {
-        rand_sleep(options.connect_sleep_ms, generator).await;
+        sleep_ms(options.connect_sleep_ms).await;
     }
 
     let version = match generator.gen_bool(options.fuzz_network_version) {
@@ -591,7 +588,7 @@ async fn fuzz(
     }
 
     if generator.gen_bool(options.connect_msg_sleep) {
-        rand_sleep(options.connect_msg_sleep_ms, generator).await;
+        sleep_ms(options.connect_msg_sleep_ms).await;
     }
 
     let mut buffer = ChunkBuffer::default();
@@ -634,7 +631,7 @@ async fn fuzz(
     }
 
     if generator.gen_bool(options.metadata_msg_sleep) {
-        rand_sleep(options.metadata_msg_sleep_ms, generator).await;
+        sleep_ms(options.metadata_msg_sleep_ms).await;
     }
 
     let ack = if generator.gen_bool(options.fuzz_ack_replies) {
@@ -660,7 +657,7 @@ async fn fuzz(
     .await?;
 
     if generator.gen_bool(options.ack_msg_sleep) {
-        rand_sleep(options.ack_msg_sleep_ms, generator).await;
+        sleep_ms(options.ack_msg_sleep_ms).await;
     }
 
     if generator.gen_bool(options.recv_ack) {

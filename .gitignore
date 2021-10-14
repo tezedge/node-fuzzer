@@ -11,12 +11,7 @@ target/
 .idea
 *.iml
 
-# Honggfuzz worspace
-/hfuzz_workspace
-/hfuzz_target
-
 # Miscellaneous
 /bootstrap_db
 /.vscode
 
-light_node/etc/tezedge/identity.json
