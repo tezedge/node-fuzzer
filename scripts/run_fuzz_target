@@ -1,0 +1,3 @@
+#!/bin/sh
+
+docker run -m=16g --network=fuzznet --ip=172.18.0.101 -ti fuzz_target

@@ -75,7 +75,7 @@ struct HandshakeOptions {
     abort_before_ack: f64,   // probability to randomly abort before sending ack message
     ack_msg_sleep: f64, // probability to randomly sleep after ack message
     ack_msg_sleep_ms: u64,
-    fuzz_ack_replies: f64, // probability to randomly fuzz ack reply
+    fuzz_ack: f64, // probability to randomly fuzz ack reply
     recv_ack: f64,    // probability to attempt to recv ack message from peer
 }
 
@@ -97,7 +97,6 @@ struct PeerMessageOptions {
     // BlockHeader, GetOperations, Operation, GetProtocols,
     // Protocol, GetOperationsForBlocks, OperationsForBlocks
     max_push_throughput: u64,      // max number of messages send in burst
-    block_header_limit: usize, // max block-header cache size
     reply_options: Option<PeerMessageReplyOptions>,
 }
 
@@ -343,11 +342,6 @@ async fn fuzz_peer_messages(
                 "OperationsForBlocks" => PeerMessage::OperationsForBlocks(generator.gen()),
                 _ => panic!("Invalid message"),
             };
-
-            if let PeerMessage::BlockHeader(bh) = msg.clone() {
-                eprintln!("msg {:?}",  bh.block_header().timestamp());
-            }
-            //eprintln!("msg {:?}",  msg.get_type());
             msg_batch.append(&mut PeerMessageResponse::from(msg).as_bytes().unwrap());
         }
 
@@ -375,12 +369,11 @@ async fn handle_response(
 ) -> Result<()> {
     if let Some(reply_options) = options.reply_options.clone() {
         let m = read_msg::<PeerMessageResponse>(stream, buffer, &key, remote, true).await?;
-        eprintln!("recv msg {:?}", m);
+        eprintln!("peer recv {:?}", m);
         match m.message {
             PeerMessage::Bootstrap => {
                 if generator.gen_bool(reply_options.bootstrap) {
                     let msg: advertise::AdvertiseMessage = generator.gen();
-                    eprintln!("sending Advertise");
                     write_msg(
                         &options.chunk_options,
                         generator,
@@ -397,7 +390,6 @@ async fn handle_response(
 
                 if generator.gen_bool(reply_options.get_current_branch) {
                     let msg: current_branch::CurrentBranchMessage = generator.gen();
-                    eprintln!("sending CurrentBranch");
                     write_msg(
                         &options.chunk_options,
                         generator,
@@ -414,7 +406,6 @@ async fn handle_response(
                     for block_hash in bh.get_block_headers() {
                         let msg = generator.get_block(block_hash);
                         if msg.is_some() {
-                            eprintln!("sending BlockHeader");
                             write_msg(
                                 &options.chunk_options,
                                 generator,
@@ -436,7 +427,6 @@ async fn handle_response(
                             generator.gen(),
                             generator.gen(),
                         );
-                        eprintln!("sending OperationsForBlocksMessage");
                         write_msg(
                             &options.chunk_options,
                             generator,
@@ -450,28 +440,22 @@ async fn handle_response(
                 }
             },
             PeerMessage::CurrentBranch(current_branch) => {
-                eprintln!("saving CurrentBranch");
                 generator.set_current_branch(current_branch);
             },
             PeerMessage::CurrentHead(current_head) => {
-                eprintln!("saving CurrentHead");
                 generator.set_chain_id(current_head.chain_id().clone());
                 generator.set_current_head(current_head);
             },
             PeerMessage::BlockHeader(block_header) => {
-                eprintln!("saving BlockHeader");
                 generator.set_block_header(block_header);
             },
             PeerMessage::Operation(operation) => {
-                eprintln!("saving Operation");
                 generator.set_operation(operation);
             },
             PeerMessage::Protocol(protocol) => {
-                eprintln!("saving Protocol");
                 generator.set_protocol(protocol);
             },
             PeerMessage::OperationsForBlocks(operations_for_blocks) => {
-                eprintln!("saving OperationsForBlocks");
                 generator.set_operations_for_blocks(operations_for_blocks);
             },
             _ => (),
@@ -512,21 +496,16 @@ async fn fuzz(
             abort_before_ack: 0.01,
             ack_msg_sleep: 0.01,
             ack_msg_sleep_ms: 20000,
-            fuzz_ack_replies: 0.01,
+            fuzz_ack: 0.01,
             recv_ack: 0.9,
         },
         Some(opt) => opt.clone(),
     };
 
-    
-    //eprintln!("connected");
-
     let socket = TcpSocket::new_v4()?;
     socket.set_reuseaddr(true)?;
     socket.set_reuseport(true)?;
-
     let addr = SocketAddrV4::new(
-            // Target should be 172.28.50.0
             Ipv4Addr::new(
                 172, 
                 28, 
@@ -535,10 +514,8 @@ async fn fuzz(
             generator.gen_range(2000 as u16..0xffff)
         );
     
-
     socket.bind(addr.try_into().unwrap())?;
     let mut stream = socket.connect(profile.peer.clone().parse().unwrap()).await?;
-
     let identity = identities.get(generator.gen_range(0..identities.len())).unwrap();
 
     if generator.gen_bool(options.abort_before_connect) {
@@ -623,7 +600,6 @@ async fn fuzz(
     if generator.gen_bool(options.recv_metadata) {
         let _m =
             read_msg::<MetadataMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
-        //eprintln!("metadata {:?}", _m);
     }
 
     if generator.gen_bool(options.abort_before_ack) {
@@ -634,7 +610,7 @@ async fn fuzz(
         sleep_ms(options.metadata_msg_sleep_ms).await;
     }
 
-    let ack = if generator.gen_bool(options.fuzz_ack_replies) {
+    let ack = if generator.gen_bool(options.fuzz_ack) {
         match generator.gen_bool(0.5) {
             true => AckMessage::NackV0,
             _ => AckMessage::Nack(generator.gen())
@@ -645,7 +621,6 @@ async fn fuzz(
         AckMessage::Ack
     };
 
-    //eprintln!("send ack");
     write_msg(
         &options.chunk_options,
         generator,
@@ -661,11 +636,8 @@ async fn fuzz(
     }
 
     if generator.gen_bool(options.recv_ack) {
-        //eprintln!("recv ack");
         read_msg::<AckMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
     }
-
-    // TODO: send get current head/current branch?
 
     if let Some(peer_message_options) = profile.peer_message_fuzzing.borrow() {
         loop {
@@ -704,12 +676,7 @@ async fn worker(identities: Arc<Vec<Identity>>, profile: Arc<Profile>, task_id: 
         match fuzz(&identities, &profile, &mut generator).await {
             Err(e) => {
                 eprintln!("ERROR: {}", e);
-
-                if Some(111) == e.raw_os_error() {
-                    return;
-                } 
-                
-                //break
+                sleep_ms(5000).await
             }
             _ => (),
         }
@@ -753,8 +720,6 @@ async fn main() {
         }).collect::<Vec<Identity>>();
 
     let max_fd = fdlimit::raise_fd_limit().unwrap();
-    eprintln!("current fd limit {}", max_fd);
-
     let mut profile = serde_json::from_str::<Profile>(&config).unwrap();
     profile.threads = std::cmp::min(profile.threads, max_fd);
 

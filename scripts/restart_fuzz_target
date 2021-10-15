@@ -1,0 +1,12 @@
+#!/usr/bin/python
+
+from xmlrpc.client import ServerProxy
+
+server = ServerProxy('http://172.18.0.101:9001/RPC2')
+
+#print(server.system.listMethods())
+server.supervisor.stopAllProcesses()
+server.supervisor.startProcess('node', False)
+server.supervisor.startProcess('coverage', False)
+server.supervisor.startProcess('httpd', False)
+

@@ -10,7 +10,7 @@ use serde_json_schema::Schema;
 use std::{
     borrow::Borrow, collections::HashSet, convert::TryFrom, sync::Arc, time::Duration,
 };
-use tokio::time::{timeout, Timeout};
+use tokio::time::{Timeout, sleep, timeout};
 
 #[derive(Clone)]
 enum ParamSchema {
@@ -247,6 +247,12 @@ fn random_json(rng: &mut SmallRng, prop: Option<&PropertyInstance>, size: usize)
     code
 }
 
+async fn sleep_ms(duration: u64) {
+    if duration > 0 {
+        sleep(Duration::from_millis(duration)).await;
+    }
+}
+
 async fn worker(target: String, paths: Vec<Path>, seed: u64) {
     let mut rng = SmallRng::seed_from_u64(seed);
     let client = Client::new();
@@ -317,7 +323,8 @@ async fn worker(target: String, paths: Vec<Path>, seed: u64) {
         match with_timeout(5, client.request(req)).await {
             Ok(resp) => match resp {
                 Err(err) => {
-                    eprintln!("!!! {}", err)
+                    eprintln!("!!! {}", err);
+                    sleep_ms(5000).await
                 }
                 Ok(mut response) => match recv_body(&mut response).await {
                     Some(body) => {
@@ -525,7 +532,7 @@ async fn main() {
             Arg::with_name("node")
                 .short("n")
                 .long("node")
-                .default_value("172.28.0.0:18732")
+                .default_value("172.18.0.101:18732")
                 .help("IP or hostname of target node"),
         )
         .arg(
@@ -539,7 +546,7 @@ async fn main() {
             Arg::with_name("threads")
                 .short("t")
                 .long("threads")
-                .default_value("4")
+                .default_value("20")
                 .help("number of fuzzer threads"),
         )
         .arg(
