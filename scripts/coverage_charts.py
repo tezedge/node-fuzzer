@@ -2,8 +2,11 @@ import json
 import matplotlib.pyplot as plt, mpld3
 from pathlib import Path
 
-history = json.load(open('/coverage/history.json', 'r'))
-Path('/coverage/charts').mkdir(parents=True, exist_ok=True)
+with open('/tmp/last_commit', 'r') as file:
+    path = '/coverage/' + file.read()
+
+history = json.load(open(f'{path}/history.json', 'r'))
+Path(f'{path}/charts').mkdir(parents=True, exist_ok=True)
 
 
 fig = plt.figure(figsize=(20, 30))
@@ -21,4 +24,4 @@ for name in history.keys():
 
 interactive_legend = mpld3.plugins.InteractiveLegendPlugin(lns, labels, start_visible=False)
 mpld3.plugins.connect(fig, interactive_legend)
-mpld3.save_html(fig, f'/coverage/charts/index.html')
+mpld3.save_html(fig, f'{path}/charts/index.html')

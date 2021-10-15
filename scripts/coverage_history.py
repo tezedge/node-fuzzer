@@ -50,14 +50,17 @@ class MyHTMLParser(HTMLParser):
             self.history[self.current_file].append(float(data.rstrip('\xa0%')))
             self.current = CurrentTab.Skip
 
+with open('/tmp/last_commit', 'r') as file:
+    path = '/coverage/' + file.read()
+
 try:
-    with open('/coverage/history.json', 'r') as fp:
+    with open(f'{path}/history.json', 'r') as fp:
         history = json.load(fp)
 except:
     history = { 'total coverage': [] }
 
 parser = MyHTMLParser(history)
-parser.feed(open('/coverage/index.html','r').read())
+parser.feed(open(f'{path}/index.html','r').read())
 
-with open('/coverage/history.json', 'w') as fp:
+with open(f'{path}/history.json', 'w') as fp:
     json.dump(history, fp)
