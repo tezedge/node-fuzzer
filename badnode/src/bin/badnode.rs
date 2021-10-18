@@ -206,7 +206,13 @@ async fn write_bytes_encrypted(
 ) -> Result<()> {
     const MACBYTES: usize = 16;
     let bytes = if generator.gen_bool(options.flip_bits) {
-        let mut remaining_flips = generator.gen_range(0 .. bytes.len()) >> 3;
+        let mut remaining_flips = if bytes.len() > 0 {
+            generator.gen_range(0 .. bytes.len()) >> 3
+        }
+        else {
+            0
+        };
+
         let mut mutated = Vec::new();
         
         for b in bytes {
@@ -308,7 +314,7 @@ async fn fuzz_peer_messages(
     local: &mut Nonce,
 ) -> Result<()> {
     let messages = &options.push_messages;
-    let mut remaining = generator.gen_range(1..options.max_push_throughput);
+    let mut remaining = generator.gen_range(0..options.max_push_throughput);
     eprintln!("Pushing {} messages in burst...", remaining);
 
     loop {
@@ -598,6 +604,7 @@ async fn fuzz(
     .await?;
 
     if generator.gen_bool(options.recv_metadata) {
+        eprintln!("recv metadata");
         let _m =
             read_msg::<MetadataMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
     }
@@ -636,6 +643,7 @@ async fn fuzz(
     }
 
     if generator.gen_bool(options.recv_ack) {
+        eprintln!("recv ack");
         read_msg::<AckMessage>(&mut stream, &mut buffer, &key, &mut remote, false).await?;
     }
 

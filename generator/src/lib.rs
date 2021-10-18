@@ -388,8 +388,12 @@ impl Generator<block_header::BlockHeaderBuilder> for RandomState {
             remaining_fitness_size -= element_size + 4;
             remaining -= element_size + 4;
         }
+
+        let data_len  = match remaining > 1 {
+            true => self.gen_range(1..remaining),
+            false => remaining
+        };
         
-        let data_len = self.gen_range(1..remaining);
         let predecessor: HashKind<BlockHash> = self.gen();
         let operations_hash: HashKind<OperationListListHash> = self.gen();
         let context: HashKind<ContextHash> = self.gen();
@@ -483,7 +487,12 @@ impl Mutator<block_header::BlockHeader> for RandomState {
             mutated
         }
         else {
-            let data_len = self.gen_range(1..remaining);
+
+            let data_len  = match remaining > 1 {
+                true => self.gen_range(1..remaining),
+                false => remaining
+            };
+
             self.gen_vec::<u8>(data_len)
         };
 
@@ -952,8 +961,16 @@ impl Generator<operations_for_blocks::OperationsForBlock> for RandomState {
         let block_hash = match self.get_current_branch() {
             Some(cb) => {
                 let history = cb.current_branch().history();
-                let random_index = self.gen_range(0..history.len());
-                history[random_index].clone()
+                let history_len = history.len();
+
+                if history_len > 0 {
+                    let random_index = self.gen_range(0..history.len());
+                    history[random_index].clone()    
+                }
+                else {
+                    let bh: HashKind<BlockHash> = self.gen();
+                    bh.0
+                }
             },
             _ => {
                 match self.get_block_header() {
