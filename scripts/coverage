@@ -7,12 +7,11 @@ import time
 import subprocess
 from datetime import datetime
 
+path = '/coverage/.fuzzing.latest/'
+
 while True:
     for proc in psutil.process_iter():
         if 'light-node' == proc.name():
-            with open('/tmp/last_commit', 'r') as file:
-                path = '/coverage/' + file.read()
-
             date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             print(f'[{date}] Sending signal to light-node ({proc.pid})...')
             os.kill(proc.pid, signal.SIGUSR2)

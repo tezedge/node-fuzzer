@@ -1,2 +1,0 @@
-#!/bin/bash
-echo -n `git rev-parse --abbrev-ref HEAD`/`(git log --format="_%s_ %h by " -n 1; git log --format="%aL at %ai" -n 1 | cut -d\+  -f 2-) | sed -e 's/[^A-Za-z0-9 #._-]/_/g' | sed '$s/\w* $//'`/ > /tmp/last_commit

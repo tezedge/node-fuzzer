@@ -2,9 +2,8 @@ import json
 import matplotlib.pyplot as plt, mpld3
 from pathlib import Path
 
-with open('/tmp/last_commit', 'r') as file:
-    path = '/coverage/' + file.read()
 
+path = '/coverage/.fuzzing.latest/'
 history = json.load(open(f'{path}/history.json', 'r'))
 Path(f'{path}/charts').mkdir(parents=True, exist_ok=True)
 
