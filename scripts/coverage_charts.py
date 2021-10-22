@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt, mpld3
 from pathlib import Path
 
 
-path = '/coverage/.fuzzing.latest/'
+path = '/coverage/develop/.fuzzing.latest/custom-fuzzer/'
 history = json.load(open(f'{path}/history.json', 'r'))
 Path(f'{path}/charts').mkdir(parents=True, exist_ok=True)
 

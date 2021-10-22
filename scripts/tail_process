@@ -5,7 +5,7 @@ from time import sleep
 from xmlrpc.client import ServerProxy
 
 if len(sys.argv) != 3 \
-  or sys.argv[1] not in ('node', 'coverage', 'httpd') \
+  or sys.argv[1] not in ('node', 'coverage') \
   or sys.argv[2] not in ('out', 'err'):
    print(f'use: {sys.argv[0]} (node|coverage) (out|err)') 
    exit(1)

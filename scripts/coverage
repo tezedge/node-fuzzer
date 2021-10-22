@@ -7,7 +7,7 @@ import time
 import subprocess
 from datetime import datetime
 
-path = '/coverage/.fuzzing.latest/'
+path = '/coverage/develop/.fuzzing.latest/'
 
 while True:
     for proc in psutil.process_iter():
@@ -18,7 +18,8 @@ while True:
             time.sleep(1)
             commands = f"""rm -f *.gcov
             lcov --directory /tezedge/target/fuzz/deps/ --capture --output-file app.info --gcov-tool /scripts/gcov.sh
-            genhtml app.info -o "{path}"
+            mkdir "{path}/custom-fuzzer"
+            genhtml app.info -o "{path}/custom-fuzzer/"
             python /scripts/coverage_history.py
             python /scripts/coverage_charts.py
             """.replace('\n', ';')

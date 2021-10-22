@@ -50,7 +50,7 @@ class MyHTMLParser(HTMLParser):
             self.history[self.current_file].append(float(data.rstrip('\xa0%')))
             self.current = CurrentTab.Skip
 
-path = '/coverage/.fuzzing.latest/'
+path = '/coverage/develop/.fuzzing.latest/custom-fuzzer/'
 
 try:
     with open(f'{path}/history.json', 'r') as fp:
