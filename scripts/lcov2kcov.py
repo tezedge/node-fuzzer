@@ -109,14 +109,14 @@ class MyHTMLParser(HTMLParser):
                 self.line['lineNum'] = data
 
             if self.current == Context.lineNoCov:
-                self.line['class'] = 'linePartCov'
+                self.line['class'] = 'lineNoCov'
                 self.line['hits'] = '0'
                 self.line['order'] = '0'
                 self.line['possible_hits'] = '1'
                 self.line['line'] = data.split(':')[1]
 
             if self.current == Context.lineCov:
-                self.line['class'] = 'linePartCov'
+                self.line['class'] = 'lineCov'
                 self.line['hits'] = '1'
                 self.line['order'] = '0'
                 self.line['possible_hits'] = '1'
