@@ -109,7 +109,7 @@ class MyHTMLParser(HTMLParser):
             self.file['total_lines'] = str(total)
             self.current = Context.Skip
 
-path = '/coverage/develop/.fuzzing.latest/custom-fuzzer'
+path = '/coverage/develop/.fuzzing.latest/custom-fuzzer/lcov'
 p2p_sources = (
     'tezedge/networking/src',	
     'tezedge/networking/src/p2p',	
@@ -235,7 +235,11 @@ def generate_index(command, sources):
         'instrumented': 0
     }
     files = []
-    os.mkdir(f'{path}/{command}')
+
+    try:
+        os.mkdir(f'{path}/{command}')
+    except:
+        pass
 
     for source in sources:
         parser = MyHTMLParser(header, files)
@@ -264,12 +268,12 @@ def generate_index(command, sources):
 rpc_summary = generate_index('RPC-Fuzzer', rpc_sources)
 p2p_summary = generate_index('P2P-Fuzzer', p2p_sources)
 
-rpc_summary['link'] = 'RPC-Fuzzer/index.html'
+rpc_summary['link'] = 'lcov/RPC-Fuzzer/index.html'
 rpc_summary['title'] = 'RPC-Fuzzer'
 rpc_summary['summary_name'] = 'RPC-Fuzzer'
 del rpc_summary['command']
 
-p2p_summary['link'] = 'P2P-Fuzzer/index.html'
+p2p_summary['link'] = 'lcov/P2P-Fuzzer/index.html'
 p2p_summary['title'] = 'P2P-Fuzzer'
 p2p_summary['summary_name'] = 'P2P-Fuzzer'
 del p2p_summary['command']
@@ -282,9 +286,7 @@ header = {
     'covered' : sum((x['covered'] for x in files)),
 }
 
-os.rename(f'{path}/index.html', f'{path}/index.lcov.html')
-
-with open(f'{path}/index.js', 'w') as js_file:
+with open('/coverage/develop/.fuzzing.latest/custom-fuzzer/index.js', 'w') as js_file:
     js_file.write((
         f'var data = {{files: {json.dumps(files)}}};'
         f'var percent_low = 25;var percent_high = 75;'
@@ -292,7 +294,7 @@ with open(f'{path}/index.js', 'w') as js_file:
         f'var merged_data = [];'
     ))
 
-with open(f'{path}/index.html', 'w') as html_file:
+with open('/coverage/develop/.fuzzing.latest/custom-fuzzer/index.html', 'w') as html_file:
     html_file.write(html_template)
 
 

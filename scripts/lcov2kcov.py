@@ -215,7 +215,7 @@ html_template = """
 </html>
 """
 
-path = '/coverage/develop/.fuzzing.latest/custom-fuzzer/'
+path = '/coverage/develop/.fuzzing.latest/custom-fuzzer/lcov/'
 
 for path in Path(path).rglob('*.gcov.html'):
     file = str(path)
