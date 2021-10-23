@@ -23,6 +23,7 @@ while True:
             python /scripts/coverage_history.py
             python /scripts/coverage_charts.py
             python /scripts/lcov2kcov.py
+            python /scripts/lcov2kcov_index.py
             """.replace('\n', ';')
             subprocess.run(commands, shell=True)
             break
