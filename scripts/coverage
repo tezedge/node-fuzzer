@@ -20,8 +20,6 @@ while True:
             lcov --directory /tezedge/target/fuzz/deps/ --capture --output-file app.info --gcov-tool /scripts/gcov.sh
             mkdir "{path}/custom-fuzzer" "{path}/custom-fuzzer/lcov/"
             genhtml app.info -o "{path}/custom-fuzzer/lcov/"
-            #python /scripts/coverage_history.py
-            #python /scripts/coverage_charts.py
             python /scripts/lcov2kcov.py
             python /scripts/lcov2kcov_index.py
             """.replace('\n', ';')
