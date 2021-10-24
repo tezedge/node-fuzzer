@@ -366,7 +366,10 @@ where
         Ok(body) => {
             let body = match body {
                 Ok(bytes) => bytes.to_vec(),
-                _ => panic!("error getting body bytes"),
+                _ => {
+                    println!("[WARN] error getting body bytes");
+                    vec![]
+                    },
             };
 
             if body.len() > 0x1000 {
