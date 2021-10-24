@@ -14,8 +14,8 @@ class Context(Enum):
     headerCovTableEntryHitDone = 6
     headerCovTableEntryTotalDone = 7
     coverFile = 9
-    coverPerLo = 10
-    coverNumLo = 11
+    coverPer = 10
+    coverNum = 11
     Unknown = 12
     Skip = 13
 
@@ -52,11 +52,11 @@ class MyHTMLParser(HTMLParser):
                     self.current = Context.coverFile
 
                 if self.current != Context.Skip:
-                    if attrs['class'] == 'coverPerLo':
-                        self.current = Context.coverPerLo
+                    if attrs['class'] in ('coverPerLo', 'coverPerMed', 'coverPerHi'):
+                        self.current = Context.coverPer
 
-                    if attrs['class'] == 'coverNumLo':
-                        self.current = Context.coverNumLo
+                    if attrs['class'] in ('coverNumLo', 'coverNumMed', 'coverNumHi'):
+                        self.current = Context.coverNum
             except:
                 pass
 
@@ -86,10 +86,10 @@ class MyHTMLParser(HTMLParser):
 
             self.file = dict()
             self.file['title'] = data
-            self.file['link'] = f'{data}.kcov.html'
+            self.file['link'] = f'../{data}.kcov.html'
             self.current = Context.Unknown
 
-        if self.current == Context.coverPerLo:
+        if self.current == Context.coverPer:
             self.file['covered'] = data.rstrip('\xa0%')
             covered = float(self.file['covered'])
 
@@ -102,7 +102,7 @@ class MyHTMLParser(HTMLParser):
 
             self.current = Context.Unknown
 
-        if self.current == Context.coverNumLo:
+        if self.current == Context.coverNum:
             covered, total = (int(x) for x in data.split('/'))
             self.file['covered_lines'] = str(covered)
             self.file['uncovered_lines'] = str(total - covered)
@@ -265,25 +265,29 @@ def generate_index(command, sources):
     return header
 
 
+def generate_header(command, summary):
+    return {
+        'link': f'lcov/{command}/index.html',
+        'title': command,
+        'summary_name': command,
+        'covered': str((summary['covered'] / summary['instrumented']) * 100),
+        'covered_lines': str(summary['covered']),
+        'uncovered_lines': str(summary['instrumented'] - summary['covered']),
+        'total_lines': str(summary['instrumented'])
+    }
+
 rpc_summary = generate_index('RPC-Fuzzer', rpc_sources)
 p2p_summary = generate_index('P2P-Fuzzer', p2p_sources)
 
-rpc_summary['link'] = 'lcov/RPC-Fuzzer/index.html'
-rpc_summary['title'] = 'RPC-Fuzzer'
-rpc_summary['summary_name'] = 'RPC-Fuzzer'
-del rpc_summary['command']
-
-p2p_summary['link'] = 'lcov/P2P-Fuzzer/index.html'
-p2p_summary['title'] = 'P2P-Fuzzer'
-p2p_summary['summary_name'] = 'P2P-Fuzzer'
-del p2p_summary['command']
-
-files = [rpc_summary, p2p_summary]
+files = [
+    generate_header('RPC-Fuzzer', rpc_summary),
+    generate_header('P2P-Fuzzer', p2p_summary),
+]
 header = {
     'command' : 'Custom-Fuzzer',
     'date' : rpc_summary['date'],
-    'instrumented' : sum((x['instrumented'] for x in files)),
-    'covered' : sum((x['covered'] for x in files)),
+    'instrumented' : rpc_summary['instrumented'] + p2p_summary['instrumented'],
+    'covered' : rpc_summary['covered'] + p2p_summary['covered']
 }
 
 with open('/coverage/develop/.fuzzing.latest/custom-fuzzer/index.js', 'w') as js_file:
