@@ -86,7 +86,6 @@ class MyHTMLParser(HTMLParser):
 
             self.file = dict()
             self.file['title'] = data
-            self.file['link'] = f'../{data}.kcov.html'
             self.current = Context.Unknown
 
         if self.current == Context.coverPer:
@@ -249,6 +248,7 @@ def generate_index(command, sources):
 
         for file in files:
             title = file['title']
+            file['link'] = f'../{source}/{title}.kcov.html'
             file['summary_name'] = f'[...]/code/{source}/{title}'
 
     with open(f'{path}/{command}/index.js', 'w') as js_file:
@@ -266,15 +266,28 @@ def generate_index(command, sources):
 
 
 def generate_header(command, summary):
-    return {
+    covered_lines = summary['covered']
+    instrumented_lines = summary['instrumented']
+    covered = (covered_lines / instrumented_lines) * 100
+    uncovered_lines = instrumented_lines - covered_lines
+    header = {
         'link': f'lcov/{command}/index.html',
         'title': command,
         'summary_name': command,
-        'covered': str((summary['covered'] / summary['instrumented']) * 100),
-        'covered_lines': str(summary['covered']),
-        'uncovered_lines': str(summary['instrumented'] - summary['covered']),
-        'total_lines': str(summary['instrumented'])
+        'covered': f'{covered:.1f}',
+        'covered_lines': str(covered_lines),
+        'uncovered_lines': str(uncovered_lines),
+        'total_lines': str(instrumented_lines)
     }
+
+    if covered < 25: 
+        header['covered_class'] = 'lineNoCov'
+    elif covered < 75:
+        header['covered_class'] = 'linePartCov'
+    else:
+        header['covered_class'] = 'lineCov'
+
+    return header
 
 rpc_summary = generate_index('RPC-Fuzzer', rpc_sources)
 p2p_summary = generate_index('P2P-Fuzzer', p2p_sources)
