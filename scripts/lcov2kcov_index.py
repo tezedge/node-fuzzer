@@ -241,15 +241,18 @@ def generate_index(command, sources):
         pass
 
     for source in sources:
-        parser = MyHTMLParser(header, files)
+        _files = []
+        parser = MyHTMLParser(header, _files)
 
         with open(f'{path}/{source}/index.html','r') as input_file:
             parser.feed(input_file.read())
 
-        for file in files:
+        for file in _files:
             title = file['title']
             file['link'] = f'../{source}/{title}.kcov.html'
             file['summary_name'] = f'[...]/code/{source}/{title}'
+
+        files += _files
 
     with open(f'{path}/{command}/index.js', 'w') as js_file:
         js_file.write((
