@@ -99,7 +99,7 @@ class MyHTMLParser(HTMLParser):
         if self.source:
             if self.current == Context.Unknown:
                 if ':' in data:
-                    self.line['line'] = data.split(':')[1]
+                    self.line['line'] = ':'.join(data.split(':')[1:])
 
             if self.current == Context.lineNum:
                 if self.line:
@@ -113,14 +113,14 @@ class MyHTMLParser(HTMLParser):
                 self.line['hits'] = '0'
                 self.line['order'] = '0'
                 self.line['possible_hits'] = '1'
-                self.line['line'] = data.split(':')[1]
+                self.line['line'] = ':'.join(data.split(':')[1:])
 
             if self.current == Context.lineCov:
                 self.line['class'] = 'lineCov'
                 self.line['hits'] = '1'
                 self.line['order'] = '0'
                 self.line['possible_hits'] = '1'
-                self.line['line'] = data.split(':')[1]
+                self.line['line'] = ':'.join(data.split(':')[1:])
         else:
             if self.current == Context.headerItem:
                 if data == 'Lines:':
