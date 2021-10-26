@@ -108,7 +108,7 @@ class MyHTMLParser(HTMLParser):
             self.file['total_lines'] = str(total)
             self.current = Context.Skip
 
-path = '/coverage/develop/.fuzzing.latest/custom-fuzzer/lcov'
+path = '/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/lcov'
 p2p_sources = (
     'tezedge/networking/src',	
     'tezedge/networking/src/p2p',	
@@ -300,13 +300,13 @@ files = [
     generate_header('P2P-Fuzzer', p2p_summary),
 ]
 header = {
-    'command' : 'Custom-Fuzzer',
+    'command' : 'P2P-RPC-Fuzzers',
     'date' : rpc_summary['date'],
     'instrumented' : rpc_summary['instrumented'] + p2p_summary['instrumented'],
     'covered' : rpc_summary['covered'] + p2p_summary['covered']
 }
 
-with open('/coverage/develop/.fuzzing.latest/custom-fuzzer/index.js', 'w') as js_file:
+with open('/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/index.js', 'w') as js_file:
     js_file.write((
         f'var data = {{files: {json.dumps(files)}}};'
         f'var percent_low = 25;var percent_high = 75;'
@@ -314,7 +314,7 @@ with open('/coverage/develop/.fuzzing.latest/custom-fuzzer/index.js', 'w') as js
         f'var merged_data = [];'
     ))
 
-with open('/coverage/develop/.fuzzing.latest/custom-fuzzer/index.html', 'w') as html_file:
+with open('/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/index.html', 'w') as html_file:
     html_file.write(html_template)
 
 

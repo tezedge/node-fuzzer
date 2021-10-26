@@ -41,7 +41,7 @@ impl CurrentHeadMessage {
 #[derive(Serialize, Deserialize, Debug, Getters, Clone, HasEncoding, NomReader)]
 pub struct GetCurrentHeadMessage {
     #[get = "pub"]
-    chain_id: ChainId,
+    pub chain_id: ChainId,
 }
 
 impl GetCurrentHeadMessage {

@@ -5,7 +5,7 @@ use generator::{Generator, RandomState};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 use tezos_messages::p2p::binary_message;
-use tezos_messages::p2p::encoding::{advertise, current_branch, operations_for_blocks};
+use tezos_messages::p2p::encoding::{advertise, current_branch, current_head, operations_for_blocks};
 
 use futures::future::join_all;
 use std::borrow::Borrow;
@@ -82,6 +82,7 @@ struct HandshakeOptions {
 #[derive(Clone, Serialize, Deserialize)]
 struct PeerMessageReplyOptions {
     bootstrap: f64,                 // probability to reply to Bootstrap requests
+    get_current_head: f64,          // probability to reply to GetCurrentHead requests
     get_current_branch: f64,        // probability to reply to GetCurrentBranch requests
     get_block_headers: f64,         // probability to reply to GetBlockHeaders requests
     get_operations_for_blocks: f64, // probability to reply to GetOperationsForBlocks requests
@@ -314,7 +315,7 @@ async fn fuzz_peer_messages(
     local: &mut Nonce,
 ) -> Result<()> {
     let messages = &options.push_messages;
-    let mut remaining = generator.gen_range(0..options.max_push_throughput);
+    let mut remaining = generator.gen_range(1..options.max_push_throughput+1);
     eprintln!("Pushing {} messages in burst...", remaining);
 
     loop {
@@ -348,8 +349,12 @@ async fn fuzz_peer_messages(
                 "OperationsForBlocks" => PeerMessage::OperationsForBlocks(generator.gen()),
                 _ => panic!("Invalid message"),
             };
-            msg_batch.append(&mut PeerMessageResponse::from(msg).as_bytes().unwrap());
+            let mut bytes = PeerMessageResponse::from(msg).as_bytes().unwrap();
+            eprintln!("Sending {:?}, size {}", &messages.get(index).unwrap()[..], bytes.len());
+            msg_batch.append(&mut bytes);
+            
         }
+
 
         write_bytes_encrypted(
             &options.chunk_options,
@@ -380,6 +385,22 @@ async fn handle_response(
             PeerMessage::Bootstrap => {
                 if generator.gen_bool(reply_options.bootstrap) {
                     let msg: advertise::AdvertiseMessage = generator.gen();
+                    write_msg(
+                        &options.chunk_options,
+                        generator,
+                        &PeerMessageResponse::from(msg),
+                        stream,
+                        &key,
+                        local,
+                    )
+                    .await?;
+                }
+            },
+            PeerMessage::GetCurrentHead(current_head::GetCurrentHeadMessage { chain_id }) => {
+                generator.set_chain_id(chain_id);
+
+                if generator.gen_bool(reply_options.get_current_head) {
+                    let msg: current_head::CurrentHeadMessage = generator.gen();
                     write_msg(
                         &options.chunk_options,
                         generator,
@@ -648,6 +669,7 @@ async fn fuzz(
     }
 
     if let Some(peer_message_options) = profile.peer_message_fuzzing.borrow() {
+        let mut x = 0;
         loop {
             handle_response(
                 &peer_message_options,
@@ -667,6 +689,8 @@ async fn fuzz(
                 &mut local,
             )
             .await?;
+            x += 1;
+            eprintln!("Iterations {}", x);
         }
     }
 

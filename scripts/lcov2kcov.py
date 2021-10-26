@@ -215,11 +215,11 @@ html_template = """
 </html>
 """
 
-path = '/coverage/develop/.fuzzing.latest/custom-fuzzer/lcov/'
+path = '/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/lcov/'
 
 for path in Path(path).rglob('*.gcov.html'):
     file = str(path)
-    header = { 'command': 'Custom Fuzzer (RPC/P2P)' }
+    header = { 'command': 'RPC/P2P Fuzzers' }
     lines = []
     parser = MyHTMLParser(header, lines)
 

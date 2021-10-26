@@ -1,5 +1,5 @@
 [package]
-name = "badnode"
+name = "p2p_fuzzer"
 version = "0.1.0"
 authors = ["Daniel K <daniel.kuehr@viablesystems.io>"]
 edition = "2018"

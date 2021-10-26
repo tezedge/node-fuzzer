@@ -83,26 +83,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "badnode"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "crypto",
- "fdlimit",
- "futures",
- "generator",
- "hex",
- "rand 0.8.4",
- "serde",
- "serde_json",
- "structopt",
- "tezos_identity",
- "tezos_messages",
- "tokio",
-]
-
-[[package]]
 name = "base58"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1001,6 +981,26 @@ name = "oorandom"
 version = "11.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ab1bc2a289d34bd04a330323ac98a1b4bc82c9d9fcb1e66b63caa84da26b575"
+
+[[package]]
+name = "p2p_fuzzer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "crypto",
+ "fdlimit",
+ "futures",
+ "generator",
+ "hex",
+ "rand 0.8.4",
+ "serde",
+ "serde_json",
+ "structopt",
+ "tezos_identity",
+ "tezos_messages",
+ "tokio",
+]
 
 [[package]]
 name = "parking_lot"

@@ -18,8 +18,8 @@ while True:
             time.sleep(1)
             commands = f"""rm -f *.gcov
             lcov --directory /tezedge/target/fuzz/deps/ --capture --output-file app.info --gcov-tool /scripts/gcov.sh
-            mkdir "{path}/custom-fuzzer" "{path}/custom-fuzzer/lcov/"
-            genhtml app.info -o "{path}/custom-fuzzer/lcov/"
+            mkdir "{path}/p2p-rpc-fuzzers" "{path}/p2p-rpc-fuzzers/lcov/"
+            genhtml app.info -o "{path}/p2p-rpc-fuzzers/lcov/"
             python /scripts/lcov2kcov.py
             python /scripts/lcov2kcov_index.py
             """.replace('\n', ';')

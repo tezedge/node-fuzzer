@@ -1,6 +1,6 @@
 [workspace]
 members = [
     "identity_tool",
-    "badnode",
+    "p2p_fuzzer",
     "rpc_fuzzer",
 ]

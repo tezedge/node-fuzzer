@@ -1,6 +1,6 @@
 #!/bin/sh
 
 echo "Starting P2P fuzzer..."
-nohup ./target/release/badnode -c badnode_default.conf -i identities.json > log/p2p_fuzzer.out 2>&1 &
+nohup ./target/release/p2p_fuzzer -c p2p_fuzzer_default.conf -i identities.json > log/p2p_fuzzer.out 2>&1 &
 echo "Starting RPC fuzzer..."
 nohup ./target/release/rpc_fuzzer > log/rpc_fuzzer.out 2>&1 &

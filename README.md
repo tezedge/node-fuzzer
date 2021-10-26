@@ -30,11 +30,11 @@ This script will:
 
 Because of #2 and #3, it is not possible to have deterministic fuzzcase reproduction. However, this is not required if we run the fuzzer and/or the target inside a record/replay (virtnyl) engine. A simpler alternative is to use a traffic sniffer (wireshark) to save HTTP requests.
 
-# P2P fuzzer (badnode)
+# P2P fuzzer
 ## Example use
 ```
-# cargo build --release --bin badnode
-# ./target/release/badnode -c badnode_default.conf -i identities.json 
+# cargo build --release --bin p2p_fuzzer
+# ./target/release/p2p_fuzzer -c p2p_fuzzer_default.conf -i identities.json 
 ```
 
 ## Parameters
@@ -93,6 +93,7 @@ The following are the sub-fields corresponding to the `peer_message_fuzzing` fie
 
 #### Reply options
 - `bootstrap`: Float that indicates the probability of replying (with a randomized `Advertise` message) after receving a `Bootstrap` message.
+- `get_current_head`: Float that indicates the probability of replying (with a randomized `CurrentHead` message) after receving a `GetCurrentHead` message.
 - `get_current_branch`: Float that indicates the probability of replying (with a randomized `CurrentBranch` message) after receving a `GetCurrentBranch` message.
 - `get_block_headers`: Float that indicates the probability of replying (with cached `BlockHeader` messages) after receving a `GetBlockHeaders` message. **WARNING**: the blocks list is currently disabled so this option doesn't have any effect.
 - `get_operations_for_blocks`: Float that indicates the probability of replying (with multiple randomized `OperationsForBlocks` messages) after receving a `GetOperationsForBlocks` message.
