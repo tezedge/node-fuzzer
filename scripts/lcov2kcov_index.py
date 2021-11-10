@@ -110,22 +110,51 @@ class MyHTMLParser(HTMLParser):
 
 path = '/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/lcov'
 p2p_sources = (
-    'tezedge/networking/src',	
-    'tezedge/networking/src/p2p',	
-    'tezedge/networking/src/p2p/peer',
-    'tezedge/tezos/encoding-derive/src',	
-    'tezedge/tezos/encoding/src',	
-    'tezedge/tezos/identity/src',	
-    'tezedge/tezos/messages/src',	
-    'tezedge/tezos/messages/src/base',	
-    'tezedge/tezos/messages/src/p2p',	
-    'tezedge/tezos/messages/src/p2p/encoding'
+'tezedge/networking/src',
+'tezedge/shell_automaton/src/peer',	
+'tezedge/shell_automaton/src/peer/binary_message/read',	
+'tezedge/shell_automaton/src/peer/binary_message/write',	
+'tezedge/shell_automaton/src/peer/chunk/read',	
+'tezedge/shell_automaton/src/peer/chunk/write',	
+'tezedge/shell_automaton/src/peer/connection',	
+'tezedge/shell_automaton/src/peer/connection/closed',	
+'tezedge/shell_automaton/src/peer/connection/incoming',	
+'tezedge/shell_automaton/src/peer/connection/incoming/accept',	
+'tezedge/shell_automaton/src/peer/connection/outgoing',	
+'tezedge/shell_automaton/src/peer/disconnection',	
+'tezedge/shell_automaton/src/peer/handshaking',	
+'tezedge/shell_automaton/src/peer/message/read',	
+'tezedge/shell_automaton/src/peer/message/write',	
+'tezedge/shell_automaton/src/peers',	
+'tezedge/shell_automaton/src/peers/add',	
+'tezedge/shell_automaton/src/peers/add/multi',	
+'tezedge/shell_automaton/src/peers/check/timeouts',	
+'tezedge/shell_automaton/src/peers/dns_lookup',	
+'tezedge/shell_automaton/src/peers/graylist',	
+'tezedge/shell_automaton/src/peers/remove',
+'tezedge/tezos/messages/src',	
+'tezedge/tezos/messages/src/base',	
+'tezedge/tezos/messages/src/p2p',	
+'tezedge/tezos/messages/src/p2p/encoding'
 )	
 rpc_sources = (
-    'tezedge/rpc/src',
-    'tezedge/rpc/src/encoding',
-    'tezedge/rpc/src/server',	
-    'tezedge/rpc/src/services'
+'tezedge/rpc/src',	
+'tezedge/rpc/src/encoding',	
+'tezedge/rpc/src/server',	
+'tezedge/rpc/src/services',	
+'tezedge/rpc/src/services/protocol',	
+'tezedge/rpc/src/services/protocol/proto_001',	
+'tezedge/rpc/src/services/protocol/proto_002',	
+'tezedge/rpc/src/services/protocol/proto_003',	
+'tezedge/rpc/src/services/protocol/proto_004',	
+'tezedge/rpc/src/services/protocol/proto_005_2',	
+'tezedge/rpc/src/services/protocol/proto_006',	
+'tezedge/rpc/src/services/protocol/proto_007',	
+'tezedge/rpc/src/services/protocol/proto_008',	
+'tezedge/rpc/src/services/protocol/proto_008_2',	
+'tezedge/rpc/src/services/protocol/proto_009',	
+'tezedge/rpc/src/services/protocol/proto_010',
+'tezedge/shell_automaton/src/rpc'
 )
 
 html_template = """
