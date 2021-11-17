@@ -65,7 +65,8 @@ fn random_number(rng: &mut SmallRng, size: usize) -> String {
         rng.gen::<i64>()
     };
 
-    rnum.to_string()[0..size].to_string()
+    let ret = rnum.to_string();
+    ret[0..size.min(ret.len())].to_string()
 }
 
 fn random_string(rng: &mut SmallRng, size: usize) -> String {
