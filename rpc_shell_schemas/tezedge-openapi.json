@@ -1,5 +1,140 @@
 {
   "paths": {
+    "/openapi/tezedge-openapi.json": {
+      "get": { }
+    },
+
+    "/dev/chains/main/actions/blocks/{block_hash}": {
+      "get": { 
+          "parameters": [
+              {
+                "name": "block_hash",
+                "in": "path",
+                "required": true,
+                "schema": { "type": "string" }
+              },
+              {
+                "name": "cursor_id",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "integer" }
+              },
+              {
+                "name": "limit",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "integer" }
+              },
+              {
+                "name": "action_types",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "string" }
+              }
+          ]            
+      }
+    },
+    "/dev/chains/main/actions/blocks/{block_hash}/details": {
+      "get": { 
+          "parameters": [
+              {
+                "name": "block_hash",
+                "in": "path",
+                "required": true,
+                "schema": { "type": "string" }
+              }
+          ]            
+      }
+    },
+    "/dev/chains/main/actions/contracts/{contract_address}": {
+      "get": { 
+          "parameters": [
+              {
+                "name": "contract_address",
+                "in": "path",
+                "required": true,
+                "schema": { "type": "string" }
+              },
+              {
+                "name": "cursor_id",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "integer" }
+              },
+              {
+                "name": "limit",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "integer" }
+              },
+              {
+                "name": "action_types",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "string" }
+              }
+          ]            
+      }
+    },
+    "/stats/memory/protocol_runners": {
+      "get": { }
+    },
+    "/stats/context": {
+      "get": {
+        "parameters": [
+          {
+            "name": "context_name",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ]
+      }
+    },
+    "/stats/{chain_id}/blocks/{block_id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "chain_id",
+            "in": "path",
+            "description": "A chain identifier. This is either a chain hash in Base58Check notation or a one the predefined aliases: 'main', 'test'.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dev/chains/{chain_id}/blocks/{block_id}/cycle_eras": {
+      "get": {
+        "parameters": [
+          {
+            "name": "chain_id",
+            "in": "path",
+            "description": "A chain identifier. This is either a chain hash in Base58Check notation or a one the predefined aliases: 'main', 'test'.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/chains/{chain_id}": {
       "patch": {
         "tags": [

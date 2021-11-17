@@ -16,6 +16,7 @@ use tokio::time::{Timeout, sleep, timeout};
 enum ParamSchema {
     String,
     Integer,
+    Boolean,
 }
 
 #[derive(Clone)]
@@ -43,13 +44,28 @@ fn random_len(rng: &mut SmallRng, min_size: usize, max_size: usize) -> usize {
     rng.gen_range(min_size..max_size)
 }
 
-fn random_number(rng: &mut SmallRng, size: usize) -> String {
-    let prefix = if rng.gen_bool(0.9) { "" } else { "-" };
-    const CHARSET: &[u8] = b"0123456789";
-    let string: String = (prefix.len()..size)
-        .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
-        .collect();
-    prefix.to_string() + &string
+fn random_number(rng: &mut SmallRng, size: usize) -> String {    
+    let rnum = if rng.gen_bool(0.5) {
+        // cover block levels for different protocol versions
+        match rng.gen_range(0..11) {
+            0 => 0,
+            1 => 1,
+            2 => rng.gen_range(2 .. 28082),
+            3 => rng.gen_range(28083 .. 204761),
+            4 => rng.gen_range(204762 .. 458752),
+            5 => rng.gen_range(458753 .. 655360),
+            6 => rng.gen_range(655361 .. 851968),
+            7 => rng.gen_range(851969 .. 1212416),
+            8 => rng.gen_range(1212417 .. 1343488),
+            9 => rng.gen_range(1343489 .. 1466367),
+            10 => rng.gen_range(1466368 .. 1589247),
+            _ => rng.gen::<i64>()
+        }
+    } else {
+        rng.gen::<i64>()
+    };
+
+    rnum.to_string()[0..size].to_string()
 }
 
 fn random_string(rng: &mut SmallRng, size: usize) -> String {
@@ -79,7 +95,15 @@ fn random_arg(
     branches: Option<&HashSet<String>>,
     blocks: Option<&HashSet<String>>,
 ) -> String {
-    let aliases = ["main", "test", "head"];
+    let constants = [
+        "main",
+        "test",
+        "head",
+        "genesis",
+        "1",
+        "cycle",
+        "voting-period"
+        ];
     let size = random_len(rng, 1, 30);
 
     if let Some(chains) = chains {
@@ -107,10 +131,12 @@ fn random_arg(
     }
 
     if rng.gen_bool(0.5) {
-        let hc_str = aliases[rng.gen_range(0..aliases.len())];
+        let hc_str = constants[rng.gen_range(0..constants.len())];
 
-        if hc_str.contains("head") && rng.gen_bool(0.5) {
-            return hc_str.to_string() + &"~".to_string() + &random_number(rng, size);
+        if rng.gen_bool(0.5) {
+            let op = ["~", "-", "+"];
+            let hc_op = op[rng.gen_range(0..op.len())];
+            return hc_str.to_string() + &hc_op.to_string() + &random_number(rng, size);
         }
 
         return hc_str.to_string();
@@ -287,21 +313,23 @@ async fn worker(target: String, paths: Vec<Path>, seed: u64) {
 
         let mut param_prefix = "?".to_string();
 
-        for param in &method.query_params {
-            if rng.gen_bool(0.5) {
-                name.push_str(&param_prefix);
-                name.push_str(&param.name);
-
+        for _ in 0 .. rng.gen_range(1..5) {
+            for param in &method.query_params {
                 if rng.gen_bool(0.5) {
-                    name.push_str("=");
-                    name.push_str(
-                        random_arg(&mut rng, Some(&chains), Some(&branches), Some(&blocks))
-                            .as_str(),
-                    );
+                    name.push_str(&param_prefix);
+                    name.push_str(&param.name);
+    
+                    if rng.gen_bool(0.5) {
+                        name.push_str("=");
+                        name.push_str(
+                            random_arg(&mut rng, Some(&chains), Some(&branches), Some(&blocks))
+                                .as_str(),
+                        );
+                    }
+    
+                    param_prefix = "&".to_string();
                 }
-
-                param_prefix = "&".to_string();
-            }
+            }    
         }
 
         let size = random_len(&mut rng, 0x500, 0x5000);
@@ -314,13 +342,19 @@ async fn worker(target: String, paths: Vec<Path>, seed: u64) {
             Body::empty()
         };
 
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method(&method.method)
-            .uri(format!("http://{}{}", target, name))
-            .body(body)
-            .unwrap();
-
-        match with_timeout(5, client.request(req)).await {
+            .uri(format!("http://{}{}", target, name));
+            
+        if rng.gen_bool(0.5) {
+            req = req.header(hyper::header::CONTENT_TYPE, random_string(&mut rng, 15));
+        }
+            
+        if rng.gen_bool(0.5) {
+            req = req.header(hyper::header::ACCEPT, random_string(&mut rng, 15));
+        }
+            
+        match with_timeout(5, client.request(req.body(body).unwrap())).await {
             Ok(resp) => match resp {
                 Err(err) => {
                     eprintln!("!!! {}", err);
@@ -449,6 +483,7 @@ fn parse_parameter(param: &Value) -> Param {
     {
         "string" => ParamSchema::String,
         "integer" => ParamSchema::Integer,
+        "boolean" => ParamSchema::Boolean,
         _ => panic!("Unknown parameter schema"),
     };
 

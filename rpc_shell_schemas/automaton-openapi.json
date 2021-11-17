@@ -1,0 +1,46 @@
+{
+    "paths": {  
+        "/dev/shell/automaton/actions_graph": {
+            "get": { }
+        },
+        "/dev/shell/automaton/actions_stats": {
+            "get": { }
+        },
+        "/dev/shell/automaton/actions": {
+            "get": { 
+                "parameters": [
+                    {
+                      "name": "rev",
+                      "in": "query",
+                      "required": true,
+                      "schema": { "type": "boolean" }
+                    },
+                    {
+                      "name": "cursor",
+                      "in": "query",
+                      "required": true,
+                      "schema": { "type": "integer" }
+                    },
+                    {
+                      "name": "limit",
+                      "in": "query",
+                      "required": true,
+                      "schema": { "type": "integer" }
+                    }
+                ]            
+            }
+        },
+        "/dev/shell/automaton/state": {
+            "get": { 
+                "parameters": [
+                    {
+                      "name": "action_id",
+                      "in": "query",
+                      "required": true,
+                      "schema": { "type": "integer" }
+                    }
+                ]            
+            }
+        }
+    }
+}
