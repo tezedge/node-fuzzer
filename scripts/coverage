@@ -10,20 +10,36 @@ from datetime import datetime
 path = '/coverage/develop/.fuzzing.latest/'
 
 while True:
+    signaled = False
+
     for proc in psutil.process_iter():
         if 'light-node' == proc.name():
             date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             print(f'[{date}] Sending signal to light-node ({proc.pid})...')
             os.kill(proc.pid, signal.SIGUSR2)
-            time.sleep(1)
-            commands = f"""rm -f *.gcov
-            lcov --directory /tezedge/target/fuzz/deps/ --capture --output-file app.info --gcov-tool /scripts/gcov.sh
-            mkdir "{path}/p2p-rpc-fuzzers" "{path}/p2p-rpc-fuzzers/lcov/"
-            genhtml app.info -o "{path}/p2p-rpc-fuzzers/lcov/"
-            python /scripts/lcov2kcov.py
-            python /scripts/lcov2kcov_index.py
-            """.replace('\n', ';')
-            subprocess.run(commands, shell=True)
-            break
+            signaled = True
+
+        if 'protocol-runner' == proc.name():
+            for tid in [t.id for t in proc.threads()]:
+                thread = psutil.Process(tid)
+
+                if 'main' == thread.name():
+                    print(
+                        f'Sending signal to protocol-runner\'s OCaml runtime thread ({tid})...')
+                    os.kill(tid, signal.SIGUSR2)
+                    signaled = True
+
+    if signaled is True:
+        time.sleep(1)
+        commands = f"""rm -f *.gcov
+        lcov --directory /tezedge/target/fuzz/deps/ --capture --output-file app.info --gcov-tool /scripts/gcov.sh
+        mkdir "{path}/p2p-rpc-fuzzers" "{path}/p2p-rpc-fuzzers/lcov/"
+        genhtml app.info -o "{path}/p2p-rpc-fuzzers/lcov/"
+        python /scripts/lcov2kcov.py
+        python /scripts/report_ocaml.py
+        python /scripts/lcov2kcov_index.py
+        rm -f /tezos/_coverage_output/*
+        """.replace('\n', ';')
+        subprocess.run(commands, shell=True)
 
     time.sleep(60 * 5)

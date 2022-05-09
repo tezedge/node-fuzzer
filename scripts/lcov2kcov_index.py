@@ -1,5 +1,6 @@
 import os
 import json
+import pathlib
 from html.parser import HTMLParser
 from enum import Enum
 
@@ -37,15 +38,15 @@ class MyHTMLParser(HTMLParser):
                     self.current = Context.headerItem
 
                 if self.current == Context.headerCovTableEntryHitDone and \
-                    attrs['class'] == 'headerCovTableEntry':
+                        attrs['class'] == 'headerCovTableEntry':
                     self.current = Context.headerCovTableEntryTotal
 
                 if self.current == Context.headerLines and \
-                    attrs['class'] == 'headerCovTableEntry':
+                        attrs['class'] == 'headerCovTableEntry':
                     self.current = Context.headerCovTableEntryHit
 
                 if self.current == Context.headerDate and \
-                    attrs['class'] == 'headerValue':
+                        attrs['class'] == 'headerValue':
                     self.current = Context.headerDateValue
 
                 if attrs['class'] == 'coverFile':
@@ -92,7 +93,7 @@ class MyHTMLParser(HTMLParser):
             self.file['covered'] = data.rstrip('\xa0%')
             covered = float(self.file['covered'])
 
-            if covered < 25: 
+            if covered < 25:
                 self.file['covered_class'] = 'lineNoCov'
             elif covered < 75:
                 self.file['covered_class'] = 'linePartCov'
@@ -108,61 +109,62 @@ class MyHTMLParser(HTMLParser):
             self.file['total_lines'] = str(total)
             self.current = Context.Skip
 
+
 path = '/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/lcov'
 p2p_sources = (
-'tezedge/networking/src',
-'tezedge/shell_automaton/src/peer',	
-'tezedge/shell_automaton/src/peer/binary_message/read',	
-'tezedge/shell_automaton/src/peer/binary_message/write',	
-'tezedge/shell_automaton/src/peer/chunk/read',	
-'tezedge/shell_automaton/src/peer/chunk/write',	
-'tezedge/shell_automaton/src/peer/connection',	
-'tezedge/shell_automaton/src/peer/connection/closed',	
-'tezedge/shell_automaton/src/peer/connection/incoming',	
-'tezedge/shell_automaton/src/peer/connection/incoming/accept',	
-'tezedge/shell_automaton/src/peer/connection/outgoing',	
-'tezedge/shell_automaton/src/peer/disconnection',	
-'tezedge/shell_automaton/src/peer/handshaking',	
-'tezedge/shell_automaton/src/peer/message/read',	
-'tezedge/shell_automaton/src/peer/message/write',	
-'tezedge/shell_automaton/src/peers',	
-'tezedge/shell_automaton/src/peers/add',	
-'tezedge/shell_automaton/src/peers/add/multi',	
-'tezedge/shell_automaton/src/peers/check/timeouts',	
-'tezedge/shell_automaton/src/peers/dns_lookup',	
-'tezedge/shell_automaton/src/peers/graylist',	
-'tezedge/shell_automaton/src/peers/remove',
-'tezedge/tezos/messages/src',	
-'tezedge/tezos/messages/src/base',	
-'tezedge/tezos/messages/src/p2p',	
-'tezedge/tezos/messages/src/p2p/encoding'
-)	
+    'tezedge/networking/src',
+    'tezedge/shell_automaton/src/peer',
+    'tezedge/shell_automaton/src/peer/binary_message/read',
+    'tezedge/shell_automaton/src/peer/binary_message/write',
+    'tezedge/shell_automaton/src/peer/chunk/read',
+    'tezedge/shell_automaton/src/peer/chunk/write',
+    'tezedge/shell_automaton/src/peer/connection',
+    'tezedge/shell_automaton/src/peer/connection/closed',
+    'tezedge/shell_automaton/src/peer/connection/incoming',
+    'tezedge/shell_automaton/src/peer/connection/incoming/accept',
+    'tezedge/shell_automaton/src/peer/connection/outgoing',
+    'tezedge/shell_automaton/src/peer/disconnection',
+    'tezedge/shell_automaton/src/peer/handshaking',
+    'tezedge/shell_automaton/src/peer/message/read',
+    'tezedge/shell_automaton/src/peer/message/write',
+    'tezedge/shell_automaton/src/peers',
+    'tezedge/shell_automaton/src/peers/add',
+    'tezedge/shell_automaton/src/peers/add/multi',
+    'tezedge/shell_automaton/src/peers/check/timeouts',
+    'tezedge/shell_automaton/src/peers/dns_lookup',
+    'tezedge/shell_automaton/src/peers/graylist',
+    'tezedge/shell_automaton/src/peers/remove',
+    'tezedge/tezos/messages/src',
+    'tezedge/tezos/messages/src/base',
+    'tezedge/tezos/messages/src/p2p',
+    'tezedge/tezos/messages/src/p2p/encoding'
+)
 rpc_sources = (
-'tezedge/rpc/src',	
-'tezedge/rpc/src/encoding',	
-'tezedge/rpc/src/server',	
-'tezedge/rpc/src/services',	
-'tezedge/rpc/src/services/protocol',	
-'tezedge/rpc/src/services/protocol/proto_001',	
-'tezedge/rpc/src/services/protocol/proto_002',	
-'tezedge/rpc/src/services/protocol/proto_003',	
-'tezedge/rpc/src/services/protocol/proto_004',	
-'tezedge/rpc/src/services/protocol/proto_005_2',	
-'tezedge/rpc/src/services/protocol/proto_006',	
-'tezedge/rpc/src/services/protocol/proto_007',	
-'tezedge/rpc/src/services/protocol/proto_008',	
-'tezedge/rpc/src/services/protocol/proto_008_2',	
-'tezedge/rpc/src/services/protocol/proto_009',	
-'tezedge/rpc/src/services/protocol/proto_010',
-'tezedge/shell_automaton/src/rpc'
+    'tezedge/rpc/src',
+    'tezedge/rpc/src/encoding',
+    'tezedge/rpc/src/server',
+    'tezedge/rpc/src/services',
+    'tezedge/rpc/src/services/protocol',
+    'tezedge/rpc/src/services/protocol/proto_001',
+    'tezedge/rpc/src/services/protocol/proto_002',
+    'tezedge/rpc/src/services/protocol/proto_003',
+    'tezedge/rpc/src/services/protocol/proto_004',
+    'tezedge/rpc/src/services/protocol/proto_005_2',
+    'tezedge/rpc/src/services/protocol/proto_006',
+    'tezedge/rpc/src/services/protocol/proto_007',
+    'tezedge/rpc/src/services/protocol/proto_008',
+    'tezedge/rpc/src/services/protocol/proto_008_2',
+    'tezedge/rpc/src/services/protocol/proto_009',
+    'tezedge/rpc/src/services/protocol/proto_010',
+    'tezedge/shell_automaton/src/rpc'
 )
 
 html_template = """
 <html>
 <head>
   <title id="window-title">???</title>
-  <link rel="stylesheet" href="/web-files/data/tablesorter-theme.css">
-  <link rel="stylesheet" type="text/css" href="/web-files/data/bcov.css"/>
+  <link rel="stylesheet" href="/web-files/tablesorter-theme.css">
+  <link rel="stylesheet" type="text/css" href="/web-files/bcov.css"/>
 </head>
 
 <noscript>
@@ -170,16 +172,16 @@ html_template = """
 </noscript>
 
 <script type="text/javascript" src="index.js"></script>
-<script type="text/javascript" src="/web-files/data/js/jquery.min.js"></script>
-<script type="text/javascript" src="/web-files/data/js/tablesorter.min.js"></script>
-<script type="text/javascript" src="/web-files/data/js/jquery.tablesorter.widgets.min.js"></script>
-<script type="text/javascript" src="/web-files/data/js/handlebars.js"></script>
-<script type="text/javascript" src="/web-files/data/js/kcov.js"></script>
+<script type="text/javascript" src="/web-files/js/jquery.min.js"></script>
+<script type="text/javascript" src="/web-files/js/tablesorter.min.js"></script>
+<script type="text/javascript" src="/web-files/js/jquery.tablesorter.widgets.min.js"></script>
+<script type="text/javascript" src="/web-files/js/handlebars.js"></script>
+<script type="text/javascript" src="/web-files/js/kcov.js"></script>
 <body>
 
 <table width="100%" border="0" cellspacing="0" cellpadding="0">
   <tr><td class="title">Coverage Report</td></tr>
-  <tr><td class="ruler"><img src="data/glass.png" width="3" height="3" alt=""/></td></tr>
+  <tr><td class="ruler"><img src="glass.png" width="3" height="3" alt=""/></td></tr>
   <tr>
     <td width="100%">
       <table cellpadding="1" border="0" width="100%">
@@ -204,7 +206,7 @@ html_template = """
       </table>
     </td>
   </tr>
-  <tr><td class="ruler"><img src="data/glass.png" width="3" height="3" alt=""/></td></tr>
+  <tr><td class="ruler"><img src="glass.png" width="3" height="3" alt=""/></td></tr>
 </table>
 
 
@@ -249,12 +251,13 @@ html_template = """
 
 <br>
 <table width="100%" border="0" cellspacing="0" cellpadding="0">
-  <tr><td class="ruler"><img src="data/amber.png" width="3" height="3" alt=""/></td></tr>
+  <tr><td class="ruler"><img src="amber.png" width="3" height="3" alt=""/></td></tr>
   <tr><td class="versionInfo">Generated by: <a href="http://simonkagstrom.github.com/kcov/index.html">Kcov</a></td></tr>
 </table>
 </body>
 </html>
 """
+
 
 def generate_index(command, sources):
     header = {
@@ -273,7 +276,7 @@ def generate_index(command, sources):
         _files = []
         parser = MyHTMLParser(header, _files)
 
-        with open(f'{path}/{source}/index.html','r') as input_file:
+        with open(f'{path}/{source}/index.html', 'r') as input_file:
             parser.feed(input_file.read())
 
         for file in _files:
@@ -312,7 +315,7 @@ def generate_header(command, summary):
         'total_lines': str(instrumented_lines)
     }
 
-    if covered < 25: 
+    if covered < 25:
         header['covered_class'] = 'lineNoCov'
     elif covered < 75:
         header['covered_class'] = 'linePartCov'
@@ -321,18 +324,87 @@ def generate_header(command, summary):
 
     return header
 
+
+def read_coverage():
+    ret = []
+    path = next(pathlib.Path('/tezos/_coverage_output').glob('*.coverage'))
+
+    with open(path, 'r') as f:
+        cov_info = f.read()
+        cov_info = cov_info[len('BISECT-COVERAGE-4'):]
+        parts = cov_info.lstrip().split(' ', 1)
+        list_len = int(parts[0])
+        cov_info = parts[1]
+
+        while len(ret) != list_len:
+            parts = cov_info.lstrip().split(' ', 1)
+            str_len = int(parts[0])
+            path_str = parts[1][:str_len]
+            cov_info = parts[1][str_len:]
+            parts = cov_info.lstrip().split(' ', 1)
+            points_len = int(parts[0])
+
+            if points_len > 0:
+                parts = parts[1].split(' ', points_len)
+                points = map(int, parts[:-1])
+            else:
+                points = []
+
+            cov_info = parts[-1]
+            parts = cov_info.lstrip().split(' ', 1)
+            counts_len = int(parts[0])
+
+            if counts_len > 0:
+                parts = parts[1].split(' ', counts_len)
+                counts = map(int, parts[:-1])
+            else:
+                counts = []
+
+            cov_info = parts[-1]
+            ret.append((path_str, tuple(zip(points, counts))))
+
+    return ret
+
+
+def coverage_files_summary(coverage):
+    for file, counts in coverage:
+        covered = sum(1 for (_, x) in counts if x != 0)
+        total = len(counts)
+        yield (file, total, covered)
+
+
+def generate_ocaml_header():
+    total_all = 0
+    covered_all = 0
+
+    for file, total, covered in coverage_files_summary(read_coverage()):
+        total_all += total
+        covered_all += covered
+
+    return {
+        'link': 'ocaml/index.html',
+        'title': 'OCaml coverage',
+        'summary_name': 'OCaml coverage',
+        'covered': round((covered_all / total_all) * 100, 2),
+        'covered_lines': str(covered_all),
+        'uncovered_lines': str(total_all - covered_all),
+        'total_lines': str(total_all),
+    }
+
+
 rpc_summary = generate_index('RPC-Fuzzer', rpc_sources)
 p2p_summary = generate_index('P2P-Fuzzer', p2p_sources)
 
 files = [
     generate_header('RPC-Fuzzer', rpc_summary),
     generate_header('P2P-Fuzzer', p2p_summary),
+    generate_ocaml_header()
 ]
 header = {
-    'command' : 'P2P-RPC-Fuzzers',
-    'date' : rpc_summary['date'],
-    'instrumented' : rpc_summary['instrumented'] + p2p_summary['instrumented'],
-    'covered' : rpc_summary['covered'] + p2p_summary['covered']
+    'command': 'P2P-RPC-Fuzzers',
+    'date': rpc_summary['date'],
+    'instrumented': sum(int(x['total_lines']) for x in files),
+    'covered': sum(int(x['covered_lines']) for x in files)
 }
 
 with open('/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/index.js', 'w') as js_file:
@@ -345,5 +417,3 @@ with open('/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/index.js', 'w') as 
 
 with open('/coverage/develop/.fuzzing.latest/p2p-rpc-fuzzers/index.html', 'w') as html_file:
     html_file.write(html_template)
-
-

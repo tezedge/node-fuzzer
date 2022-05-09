@@ -1,11 +1,14 @@
 #!/usr/bin/python
 
+import requests
 from xmlrpc.client import ServerProxy
+
+# state machine fuzzer
+requests.get('http://127.0.0.1:8080/start')
 
 server = ServerProxy('http://172.18.0.101:9001/RPC2')
 
-#print(server.system.listMethods())
+# print(server.system.listMethods())
 server.supervisor.stopAllProcesses()
 server.supervisor.startProcess('node', False)
 server.supervisor.startProcess('coverage', False)
-
