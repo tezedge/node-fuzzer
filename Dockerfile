@@ -7,7 +7,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 RUN update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
 RUN pip install psutil
 # RUN pip install matplotlib mpld3
-RUN git clone https://github.com/tezedge/tezedge --branch interop_bisect
+RUN git clone https://github.com/tezedge/tezedge --branch develop
 COPY ./scripts /scripts
 ENV RUSTUP_HOME=/rust
 ENV CARGO_HOME=/cargo
